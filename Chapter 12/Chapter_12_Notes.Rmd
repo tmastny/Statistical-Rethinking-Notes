@@ -1,0 +1,256 @@
+---
+title: "Chapter 12 Notes"
+author: "Tim"
+date: "10/22/2017"
+output: 
+  html_document:
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, 
+                      results='show', cache=TRUE, autodep=TRUE)
+```
+
+## 12.1 Multilevel Tadpoles
+
+```{r}
+library(rethinking)
+library(brms)
+library(tidyverse)
+library(tidybayes)
+
+rstan_options (auto_write=TRUE)
+options (mc.cores=parallel::detectCores ()) # Run on multiple cores
+
+data(reedfrogs)
+d <- reedfrogs
+d$tank <- 1:NROW(d)
+d %>% as.tibble()
+```
+
+```{r, results='hide'}
+mod.intercept <- brm(surv | trials(density) ~ 1 + (1 | tank),
+                     family = binomial(), data=d,
+                     prior = c(set_prior("normal(0,1)", class = 'sd',
+                                         group = 'tank', coef='Intercept'),
+                               set_prior("cauchy(0,1)", class = 'sd',
+                                         group = 'tank')))
+```
+```{r}
+summary(mod.intercept)
+```
+
+Let's reconstruct the plot on page 361:
+
+```{r}
+p <- ggplot(d, aes(x=tank)) + 
+  geom_point(aes(y=propsurv)) +
+  geom_hline(yintercept = mean(d$propsurv), linetype=2) + 
+  geom_vline(xintercept = c(16.5, 32.5))
+p
+```
+
+Now let's take a look at the predicted survival rates:
+
+```{r}
+d.mean <- d %>%
+  add_fitted_samples(mod.intercept) %>%
+  mean_qi() %>%
+  mutate(propsurv_pred = estimate/density)
+```
+```{r}
+p +
+  geom_point(aes(y=propsurv_pred), data=d.mean, shape=1) + 
+  geom_hline(yintercept = logistic(1.38)) # predicted population mean (intercept)
+```
+
+Here we can see the classic shrinkage on each tank using a multilevel model. Moreover the tanks are sorted from smallest to larger: therefore as we move to the right we have less shrinkage. Lastly, also note that the new estimated population mean is different than the observed mean.
+
+Let's try to fit the model with a predictor. I would expect that predators would decrease the the probability of survival.
+
+```{r, results='hide'}
+# indicator variable for predator
+d$pred <- ifelse(d$pred == 'pred', 1, 0)
+mod.pred <- brm(surv | trials(density) ~ pred + (pred | tank), data=d,
+                family = binomial(),
+                prior = c(set_prior("normal(0,1)", class = 'sd',
+                                     group = 'tank', coef='Intercept'),
+                           set_prior("cauchy(0,1)", class = 'sd',
+                                     group = 'tank')))
+```
+```{r}
+summary(mod.pred)
+```
+
+It allow makes sense that survival depends on the number of tadpoles relative to the size of a tank, whether a predator is present or not. If there are many tadpoles in a small tank, the survival rate should decrease when a predator is present.
+
+```{r, results='hide'}
+mod.interaction <- brm(surv | trials(density) ~ pred*density*size 
+                       + (1 | tank), 
+                       data=d, family = binomial(),
+                       prior = c(set_prior("normal(0,1)", class = 'sd',
+                                     group = 'tank', coef='Intercept'),
+                                 set_prior("cauchy(0,1)", class = 'sd',
+                                     group = 'tank')))
+```
+```{r}
+summary(mod.interaction)
+```
+```{r}
+LOO(mod.intercept, mod.pred, mod.interaction)
+```
+
+Based on `loo` estimates, the full interaction model seems to over fit, with confidence given the standard error. Let's try without interactions:
+
+```{r, results='hide'}
+mod.full.main <- brm(surv | trials(density) ~ pred + density + size 
+                       + (1 | tank), 
+                       data=d, family = binomial(),
+                       prior = c(set_prior("normal(0,1)", class = 'sd',
+                                     group = 'tank', coef='Intercept'),
+                                 set_prior("cauchy(0,1)", class = 'sd',
+                                     group = 'tank')))
+```
+```{r}
+summary(mod.full.main)
+```
+```{r}
+LOO(mod.intercept, mod.pred, mod.interaction, mod.full.main)
+```
+
+Thus after considering the effect of predation, density seems to matter very little, while there seems to be some small effect of small sizes improving survival rate. Moreover, this result is consistent with the small effects when looking at the interaction model. 
+
+Thus including the hierarchical predictor of predator gives us the best model. But how exactly do we interpret that effect? Well consider this:
+
+```{r, results='hide'}
+mod.pred.pop <- brm(surv | trials(density) ~ pred + (1 | tank), 
+                       data=d, family = binomial(),
+                       prior = c(set_prior("normal(0,1)", class = 'sd',
+                                     group = 'tank', coef='Intercept'),
+                                 set_prior("cauchy(0,1)", class = 'sd',
+                                     group = 'tank')))
+```
+```{r}
+summary(mod.pred.pop)
+```
+```{r}
+LOO(mod.pred, mod.pred.pop)
+```
+
+So we need the predator predictor on the tank level. I still need to research how to interpret it; but I think we are pull the variance of the effect of predator on each tank. 
+
+Specifically, I believe `sd(pred)` is the distribution of the parameter predator for each tank. 
+
+One way to understand is to remember the mathematical formula of a multilevel model. With `mod.pred`, we are technically fitting the following model: 
+\begin{align*}
+p_{\text{survivial}} &\sim \text{Normal}(\mu, \sigma) \\
+\mu &= \alpha_\text{tank} + \beta_{\text{pred}} \cdot \text{pred} + \beta_\text{pred | tank} \cdot \text{pred} \\
+\alpha_\text{tank} &\sim \text{Normal}(\mu_\text{intercept}, \text{sd}(\alpha)) \\
+\beta_\text{pred | tank} &\sim \text{Normal}(\mu_\text{pred}, \text{sd}(\beta)) \\
+\cdots
+\end{align*}
+
+So our multilevel model is calculating the standard deviation on a group specific parameters. Ah! Is the mean the population effect? Yes, indeed. That is verified on page 359. 
+
+```{r}
+pp_check(mod.pred)
+```
+
+```{r}
+pp_check(mod.intercept)
+```
+
+As warned in the `brms` document, the fit looks okay for both (with mod.pred better). The real results come from comparing the `loo`s. 
+
+What happens if we include predator as a group level predictor without having it as a population predictor? My thoughts is that the model will force it as a population effect.
+
+```{r, results='hide'}
+mod.pred.test <- brm(surv | trials(density) ~ 1 + (pred | tank), 
+                       data=d, family = binomial(),
+                       prior = c(set_prior("normal(0,1)", class = 'sd',
+                                     group = 'tank', coef='Intercept'),
+                                 set_prior("cauchy(0,1)", class = 'sd',
+                                     group = 'tank')))
+```
+```{r}
+summary(mod.pred.test)
+```
+```{r}
+LOO(mod.pred.test, mod.pred)
+```
+
+Good to know: it doesn't add it in, but it doesn't seem to be wise advice in general.
+
+Just for fun: 
+
+I'm also curious about a more complete interaction model by the tank level. 
+
+```{r, results='hide'}
+mod.full <- brm(surv | trials(density) ~ pred*density*size + 
+                  (pred*density*size | tank), 
+                       data=d, family = binomial(),
+                       prior = c(set_prior("normal(0,1)", class = 'sd',
+                                     group = 'tank', coef='Intercept'),
+                                 set_prior("cauchy(0,1)", class = 'sd',
+                                     group = 'tank')))
+```
+```{r}
+summary(mod.full)
+```
+```{r}
+LOO(mod.full, mod.pred)
+```
+
+For future reference, the model fit fairly quick. I shouldn't have any trepidation trying it out. Here it seems irrelevant.
+
+## Multilevel chimps
+
+Next we return to the chimp data and consider multiple cluster types. 
+
+```{r}
+data("chimpanzees")
+d <- chimpanzees
+d$recipient <- NULL
+d %>% as.tibble()
+```
+
+First, we'll fit one cluster:
+
+```{r, results='hide'}
+mod.cluster <- brm( pulled_left ~ 1 + (1 | actor) +
+                      prosoc_left*condition - condition,
+                    data = d, family = bernoulli(),
+                    prior = c(set_prior("normal(0,10)", class = 'Intercept'),
+                              set_prior("normal(0,10)", class = 'b'),
+                              set_prior("cauchy(0,1)", class = 'sd',
+                                        group = 'actor')))
+```
+```{r}
+summary(mod.cluster)
+```
+
+Here is a convinent way to get estimates from the intercepts by actor for the model. 
+
+```{r}
+coef(mod.cluster)$actor[,,'Intercept']
+```
+
+Moreover, we can sample parameters from `brms` as is done in rethinking:
+
+```{r}
+str(posterior_samples(mod.cluster))
+```
+
+We should be able to do something similar with `tidybayes`:
+
+```{r}
+actor_intercepts <- mod.cluster %>% spread_samples(r_actor[actor,])
+actor_intercepts
+actor_intercepts %>% mean_qi()
+```
+
+We would expect the same results as above, but we got slightly different estimates, for both the mean and confidence intervals. 
+
+
+
