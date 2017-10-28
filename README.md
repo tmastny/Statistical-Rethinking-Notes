@@ -18,9 +18,9 @@ http://scs.math.yorku.ca/index.php/SCS_Reads_2016-2017
 
 ### Why my notes are different
 
-The book follows a traditional `r-base` style along with some added utility and Stan functions from the `rethinking` package. The other notes mostly conform to this style. This is an effective way to introduce R and Stan since it is a low barrier to entry. 
+The book follows a traditional `r-base` style along with some added utility and Stan functions from the `rethinking` package. The other notes mostly conform to this style.  
 
-One downside to this approach is that other useful packages and powerful tools are ignored. As my notes progress I adopt more packages, while trying to verify that I get the same results using the expected methods. I thought this was a good way to build confidence and experience with the new tools. 
+As my notes progress I explore new packages while trying to verify the results using the expected methods. Following along with the book is a good way for me to build confidence and experience with new tools. 
 
 Here are some of the packages that I incorporate:
 
