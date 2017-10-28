@@ -1,0 +1,352 @@
+---
+title: "Chapter 6 Notes"
+author: "Tim"
+date: "10/1/2017"
+output:
+  html_document:
+    keep_md: yes
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, results='hide')
+```
+
+## Chapter 6 Hard
+
+Each problem will make use of the following data:
+
+```{r}
+library(rethinking)
+data("Howell1")
+d <- Howell1
+d$age <- (d$age - mean(d$age))/sd(d$age)
+set.seed(1000)
+i <- sample(1:nrow(d), size=nrow(d)/2)
+d1 <- d[i,]
+d2 <- d[-i,]
+```
+
+## 6H1
+
+Here, we split our data into two distinct sets each with 272 rows. We need to fit polynomial models up to degree 6 on `d1` and then test on `d2`. Here is what we are working with:
+
+```{r}
+plot(height~age, data=d)
+```
+
+
+```{r, echo=FALSE}
+a.start = mean(d$height)
+s.start = sd(d$height)
+m1 <- map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + b1 * age,
+    a ~ dnorm(0,100),
+    b1 ~ dnorm(0,100),
+    sigma ~ dunif(0,100)
+  ),
+  data = d1, start = list(a = a.start, sigma = s.start, b1 = 0)
+)
+
+m2 <- map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + b1 * age + b2 * age^2,
+    a ~ dnorm(0,100),
+    b1 ~ dnorm(0,100),
+    b2 ~ dnorm(0,100),
+    sigma ~ dunif(0,100)
+  ),
+  data = d1 , start = list(a = a.start, sigma = s.start, b1 = 0, b2=0)
+)
+
+m3 <- map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + b1 * age + b2 * age^2 + b3 * age^3,
+    a ~ dnorm(0,100),
+    b1 ~ dnorm(0,100),
+    b2 ~ dnorm(0,100),
+    b3 ~ dnorm(0,100),
+    sigma ~ dunif(0,100)
+  ),
+  data = d1, start = list(a = a.start, sigma = s.start, b1 = 0, b2=0, b3=0)
+)
+
+m4 <- map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + b1 * age + b2 * age^2 + b3 * age^3 + b4 * age^4,
+    a ~ dnorm(0,100),
+    b1 ~ dnorm(0,100),
+    b2 ~ dnorm(0,100),
+    b3 ~ dnorm(0,100),
+    b4 ~ dnorm(0,100),
+    sigma ~ dunif(0,100)
+  ),
+  data = d1, start = list(a = a.start, sigma = s.start, b1 = 0, b2=0, b3=0, b4=0)
+)
+
+m5 <- map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + b1 * age + b2 * age^2 + b3 * age^3 + b4 * age^4 + b5 * age^5,
+    a ~ dnorm(150,100),
+    b1 ~ dnorm(0,10),
+    b2 ~ dnorm(0,10),
+    b3 ~ dnorm(0,10),
+    b4 ~ dnorm(0,10),
+    b5 ~ dnorm(0,10),
+    sigma ~ dunif(0,30)
+  ),
+  data = d1, start = list(a = a.start, sigma = s.start, b1 = 0, b2=0, b3=0, b4=0, b5=0)
+)
+
+# getting a singularity on m6
+m6 <- map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + b1 * age + b2 * age^2 + b3 * age^3 + b4 * age^4 + b5 * age^5 + b6 * age^6,
+    a ~ dnorm(150,100),
+    b1 ~ dnorm(0,10),
+    b2 ~ dnorm(0,10),
+    b3 ~ dnorm(0,10),
+    b4 ~ dnorm(0,10),
+    b5 ~ dnorm(0,10),
+    b6 ~ dnorm(0,10),
+    sigma ~ dunif(0,30)
+  ),
+  data = d1, start = list(a = a.start, sigma = s.start, b1 = 0, b2=0, b3=0, b4=0, b5=0, b6=0)
+)
+
+```
+
+So we fit a list of polynomial models, but this shouldn't always be our starting point. Graph the relation and think about what the model should be, especially when it is bi-variate. For this height, a piece-wise linear model makes more sense. One that increases from birth to around 20, and then slowly decreases until death. 
+
+Here is the comparison using WAIC:
+
+```{r, fig.align='center', fig.height=2, fig.width=5, results='show'}
+(model.comparsions <- compare(m1, m2, m3, m4, m5, m6))
+plot(model.comparsions, SE=TRUE, dSE=TRUE)
+```
+
+## 6H2
+Next, we want to graph the models to get a sense of the fit:
+
+```{r, echo=FALSE, fig.align='center'}
+# m1 plot
+m.seq <- seq(from=-2, to=4, length.out=30)
+post <- extract.samples(m1)
+mu.link <- function(m) post$a + post$b1 * m
+mu <- sapply(m.seq, mu.link)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+plot(height~age, data=d1, col=rangi2)
+lines(m.seq, mu.mean)
+shade(mu.PI, m.seq)
+```
+
+```{r, echo=FALSE, fig.align='center'}
+# m2 plot
+m.seq <- seq(from=-2, to=4, length.out=30)
+post <- extract.samples(m2)
+mu.link <- function(m) post$a + post$b1 * m + post$b2 * m^2
+mu <- sapply(m.seq, mu.link)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+plot(height~age, data=d1, col=rangi2)
+lines(m.seq, mu.mean)
+shade(mu.PI, m.seq)
+```
+
+```{r, echo=FALSE, fig.align='center'}
+# m2 plot
+m.seq <- seq(from=-2, to=4, length.out=30)
+post <- extract.samples(m3)
+mu.link <- function(m) post$a + post$b1 * m + post$b2 * m^2 + post$b3 * m^3
+mu <- sapply(m.seq, mu.link)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+plot(height~age, data=d1, col=rangi2)
+lines(m.seq, mu.mean)
+shade(mu.PI, m.seq)
+```
+
+```{r, echo=FALSE, fig.align='center'}
+# m2 plot
+m.seq <- seq(from=-2, to=4, length.out=30)
+post <- extract.samples(m4)
+mu.link <- function(m) post$a + post$b1 * m + post$b2 * m^2 + post$b3 * m^3 + post$b4 * m^4
+mu <- sapply(m.seq, mu.link)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+plot(height~age, data=d1, col=rangi2)
+lines(m.seq, mu.mean)
+shade(mu.PI, m.seq)
+```
+
+```{r, echo=FALSE, fig.align='center'}
+# m2 plot
+m.seq <- seq(from=-2, to=4, length.out=30)
+post <- extract.samples(m5)
+mu.link <- function(m) post$a + post$b1 * m + post$b2 * m^2 + post$b3 * m^3 + post$b4 * m^4 + post$b5 * m^5
+mu <- sapply(m.seq, mu.link)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+plot(height~age, data=d1, col=rangi2)
+lines(m.seq, mu.mean)
+shade(mu.PI, m.seq)
+```
+
+```{r, echo=FALSE, fig.align='center'}
+# m2 plot
+m.seq <- seq(from=-2, to=4, length.out=30)
+post <- extract.samples(m6)
+mu.link <- function(m) post$a + post$b1 * m + post$b2 * m^2 + post$b3 * m^3 + post$b4 * m^4 + post$b5 * m^5 + post$b6 * m^6
+mu <- sapply(m.seq, mu.link)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+plot(height~age, data=d1, col=rangi2)
+lines(m.seq, mu.mean)
+shade(mu.PI, m.seq)
+```
+
+It is important to remember that boon and curse of polynomials is that they can always fit data to an arbitrary degree. Moreover, increase polynomial fits make very little sense for data outside of the range of the sample, as evidenced by the tails of the higher degree forms.
+
+## 6H3
+
+Now we construct the average plot and plot its predict. I'll pre-register and commit to the idea that it will fit the data much worse. I don't think the conservatism of the averaged model will make much sense with this nonlinear, or piece-wise linear data. 
+
+```{r}
+d.age <- data.frame(
+  age=seq(from=-2, to=4, length.out=30)
+)
+height.ensemble <- ensemble(m1,m2,m3,m4,m5,m6, data=d.age)
+mu.mean <- apply(height.ensemble$link, 2, mean)
+mu.PI <- apply(height.ensemble$link, 2, PI)
+plot(height~age, data=d1, col=rangi2)
+lines(m.seq, mu.mean)
+shade(mu.PI, m.seq)
+```
+
+I was totally wrong. I forgot that the `ensemble` function is weighted by the Akaike Weight in the WAIC table, shown below. All of the weight is in the last three, which gives us a nice averaged prediction:
+
+`     WAIC pWAIC dWAIC weight    SE   dSE`
+`m4 1925.9   5.5   0.0   0.58 25.33    NA`
+`m5 1927.7   6.3   1.8   0.24 25.45  0.51`
+`m6 1928.2   7.3   2.3   0.19 25.24  1.82`
+`m3 1953.0   5.7  27.1   0.00 24.26 10.82`
+`m2 2150.1   5.3 224.2   0.00 22.70 26.65`
+`m1 2395.4   3.4 469.5   0.00 23.04 31.03`
+
+## 6H4
+
+Next, we used WAIC to estimate out of sample deviance. Now we can actually test it using the data from `d2`. 
+
+```{r}
+d2.predict <- list(age <- d2$age)
+models <- list(m1, m2, m3, m4, m5, m6)
+
+deviances <- sapply(models, function(mod) {
+  pred <- link(mod, data=d2.predict)
+  mu.mean <- apply(pred, 2, mean)
+  -2*sum(dnorm(d2$height, mu.mean, coef(mod)["sigma"], log=TRUE))
+})
+```
+```{r, results='show'}
+names(deviances) <- c('m1','m2','m3','m4','m5','m6')
+deviances <- sort(deviances)
+deviances
+```
+
+## 6H5
+
+Let's normalize out-of-sample deviance.
+
+```{r, results='show'}
+(deviances.norm <- deviances - min(deviances))
+```
+
+WAIC is very close to the measured out-of-sample deviances, within the listed standard errors. Moreover, the actual results of the out-of-sample test shows that models 4, 5, and 6 are near identical anyway. 
+
+If anything, WAIC overestimated the accuracy of models 1, 2, and 3.
+
+## 6H6
+
+Next we are going to try to regularizing priors on the 6th degree polynomial. 
+
+```{r, echo=FALSE}
+m6.6 <- map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + b1 * age + b2 * age^2 + b3 * age^3 + b4 * age^4 + b5 * age^5 + b6 * age^6,
+    a ~ dnorm(150,100),
+    b1 ~ dnorm(0,5),
+    b2 ~ dnorm(0,5),
+    b3 ~ dnorm(0,5),
+    b4 ~ dnorm(0,5),
+    b5 ~ dnorm(0,5),
+    b6 ~ dnorm(0,5),
+    sigma ~ dunif(0,30)
+  ),
+  data = d1, start = list(a = a.start, sigma = s.start, b1 = 0, b2=0, b3=0, b4=0, b5=0, b6=0)
+)
+```
+
+```{r, echo=FALSE, fig.align='center'}
+# m2 plot
+m.seq <- seq(from=-2, to=4, length.out=30)
+post <- extract.samples(m6.6)
+mu.link <- function(m) post$a + post$b1 * m + post$b2 * m^2 + post$b3 * m^3 + post$b4 * m^4 + post$b5 * m^5 + post$b6 * m^6
+mu <- sapply(m.seq, mu.link)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+plot(height~age, data=d1, col=rangi2)
+lines(m.seq, mu.mean)
+shade(mu.PI, m.seq)
+```
+
+```{r}
+d2.predict <- list(age <- d2$age)
+models <- list(m4, m5, m6, m6.6)
+
+deviances <- sapply(models, function(mod) {
+  pred <- link(mod, data=d2.predict)
+  mu.mean <- apply(pred, 2, mean)
+  -2*sum(dnorm(d2$height, mu.mean, coef(mod)["sigma"], log=TRUE))
+})
+```
+```{r, results='show'}
+names(deviances) <- c('m4','m5','m6', 'm6.6')
+deviances <- sort(deviances)
+deviances
+```
+```{r, results='show'}
+compare(m4,m5,m6,m6.6)
+```
+
+The model with stronger priors has better out-of-sample deviance than either any previous model, but the WAIC is the worst. 
+
+To investigate, let's look at the effect the priors have on the parameters:
+
+```{r, results='show'}
+precis(m6)
+precis(m6.6)
+```
+
+They are certainly different, but nothing sticks out.
+
+Recall the purpose of regularizing priors is to prevent overfit. Regularizing prior produces a smoother, more generalizing fit than others. A model with flat priors can read too much into the noise of a sample.
+
+So the basic practice makes sense, but the question remains: why should a prior regularized towards zero make better predicts, while simultaneously giving a worse WAIC score?
+
+As is consistent with priors more regularized to 0, model `m6.6` has most, but not all parameters closer to zero. 

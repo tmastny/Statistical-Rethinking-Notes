@@ -1,0 +1,882 @@
+---
+title: "Chapter 11 Practice"
+author: "Tim"
+date: "10/17/2017"
+output: 
+  html_document:
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, 
+                      results='show', cache=TRUE, autodep=TRUE)
+```
+
+## 11H1
+
+```{r}
+library(rethinking)
+library(tidyverse)
+map <- rethinking::map
+
+data("Hurricanes")
+d <- Hurricanes
+d <- d %>% rowid_to_column('Observation')
+head(d)
+```
+
+A controversial paper using this data argued that the hurricanes with female names lead to more deaths than hurricanes with male names. The theory was that fewer people evacuated because they took female names (and thus female named hurricanes) less seriously. 
+
+For this problem, lets model the number of deaths based on femininity of the hurricane's name. This is a Poisson model:
+
+```{r, results='hide'}
+mh1.intercept <- map2stan(
+  alist(
+    deaths <- dpois(lambda),
+    log(lambda) <- a,
+    a ~ dnorm(0,10)
+  ),
+  data=d
+)
+```
+```{r, results='hide'}
+mh1.fem <- map2stan(
+  alist(
+    deaths <- dpois(lambda),
+    log(lambda) <- a + bF * femininity,
+    a ~ dnorm(0,10),
+    bF ~ dnorm(0,10)
+  ),
+  data=d
+)
+```
+```{r}
+compare(mh1.intercept, mh1.fem)
+```
+
+Including femininity as a predictor greatly improves predictive power, as the authors hypothesized. Let's see the parameters:
+
+```{r}
+precis(mh1.fem)
+```
+
+There is a weak, but consistently positive association between femininity and the number of deaths.
+
+Let's plot the predictions:
+
+```{r}
+d.pred <- data.frame(
+  femininity=seq(from=min(d$femininity), to=max(d$femininity),
+                 length.out=nrow(d)),
+  Observation=1:nrow(d)
+)
+
+m.link <- link(mh1.fem, d.pred)
+d.pred$mean <- apply(m.link, 2, mean)
+
+m.PI <- apply(m.link, 2, PI)
+d.pred$lo <- m.PI[1,]
+d.pred$hi <- m.PI[2,]
+
+d.pred <- d.pred %>% rename(pred.femininity = femininity)
+d.pred <- left_join(d, d.pred)
+```
+
+```{r, fig.align='center', fig.height=4, fig.width=4}
+ggplot(d.pred) +
+  geom_point(aes(x=femininity, y=deaths)) + 
+  geom_line(aes(x=pred.femininity, y=mean)) + 
+  geom_ribbon(aes(x=pred.femininity, ymin=lo, ymax=hi),
+              alpha = 0.4, fill = "grey60")
+```
+
+This line is consistent with the weak, but positive `bF` parameter in the model summary. Based on the graph, even though the hurricanes with the most deaths have female names, the majority female hurricanes have few to no deaths, which is consistent with a small positive association.
+
+A natural question is to wonder whether this association still exists after controlling for the severity of the hurricane.
+
+## 11H2
+
+Count models are often over-dispersed: meaning the variance in the data is much higher than the count model would expect. For example,
+
+```{r}
+sd(d$deaths[d$femininity >= 7.5])^2
+```
+
+is clearly much larger than the graph of the expected count would indicate, since for Poisson models, $Var(m) = E[m] = \lambda$ and based on the graph, $\lambda$ is around maybe 20:
+```{r}
+post <- extract.samples(mh1.fem)
+
+fem.seq <- seq(from=7.5, to=max(d$femininity), length.out = 100)
+mean(exp(post$a + post$bF * fem.seq))
+```
+
+Recall that one strategy to model over-dispersed outcomes is to fit a distribution of probabilities, in this case a gamma-Poisson:
+
+```{r, results='hide'}
+mh1.fem.gp <- map2stan(
+  alist(
+    deaths <- dgampois(mu, scale),
+    log(mu) <- a + bF * femininity,
+    a ~ dnorm(0,100),
+    bF ~ dnorm(0,1),
+    scale ~ dcauchy(0,2)
+  ),
+  data=d,
+  constraints = list(scale='lower=0'),
+  start=list(scale=2)
+)
+```
+```{r}
+precis(mh1.fem.gp)
+```
+
+In this model summary, the parameter `bF` is not longer reliably positive. Recall that in the gamma-Poisson model, the model assumes each observation has is own rate, or count and the outcome of a model is a distribution of those counts. This means that a high death count hurricane could possibly be in the tail end of the gamma distribution with high death count, regardless of its femininity.
+
+Here, we can model the distribution of various counts. 
+
+```{r, fig.align='center', fig.height=4, fig.width=6}
+post <- extract.samples(mh1.fem.gp)
+
+curve(dgamma2(x, mean(exp(post$a + post$bF * d$femininity)),
+              mean(post$scale)), from=0, to=100,
+             ylab='density', xlab='count of deaths', ylim=c(0,0.2),
+      ,xlim=c(6,80), lwd=2)
+
+for (i in 1:100) {
+  p <- exp(post$a[i] + post$bF[i] * d$femininity)
+  theta <- post$scale[i]
+  curve(dgamma2(x, p, theta), add=TRUE, col=col.alpha('black',0.2))
+}
+```
+
+## 11H3
+
+As mentioned before, we want to know the effect of femininity after controlling for the strength of the hurricane. We will fit a few models, including main effects and interactions.
+
+```{r}
+d$femininity_s <- (d$femininity - mean(d$femininity))/sd(d$femininity)
+d$min_pressure_s <- (d$min_pressure - mean(d$min_pressure))/sd(d$min_pressure)
+d$damage_norm_s <- (d$damage_norm - mean(d$damage_norm))/sd(d$damage_norm)
+```
+
+```{r, results='hide'}
+mh3.main <- map2stan(
+  alist(
+    deaths <- dpois(lambda),
+    log(lambda) <- a + bF * femininity_s + bDN * damage_norm_s +
+      bMP * min_pressure_s,
+    a ~ dnorm(0,10),
+    bF ~ dnorm(0,10),
+    bDN ~ dnorm(0,10),
+    bMP ~ dnorm(0,10)
+  ),
+  data=d
+)
+```
+```{r}
+precis(mh3.main)
+```
+
+Recall that as pressure decreases, the severity of the hurricane increases. Moreover, we see an increase in the effect female names have on the death count. So even controlling for the damage variables, we see that femininity is associated with a higher death count. Let's look at two more models: main plus interaction, and just interaction:
+
+```{r, results='hide'}
+mh3.main.interaction <- map2stan(
+  alist(
+    deaths <- dpois(lambda),
+    log(lambda) <- a + bF * femininity_s + bDN * damage_norm_s +
+      bMP * min_pressure_s + bFDN * damage_norm_s * femininity_s +
+      bFMP * min_pressure_s * femininity_s,
+    a ~ dnorm(0,10),
+    bF ~ dnorm(0,10),
+    bDN ~ dnorm(0,10),
+    bMP ~ dnorm(0,10),
+    bFDN ~ dnorm(0,10),
+    bFMP ~ dnorm(0,10)
+  ),
+  data=d
+)
+```
+```{r}
+precis(mh3.main.interaction)
+```
+
+With just an interaction model, we would predict a positive interaction term. If femininity really causes death, the effect should be even worse when the storms are worse:
+
+```{r, results='hide'}
+mh3.interaction <- map2stan(
+  alist(
+    deaths <- dpois(lambda),
+    log(lambda) <- a + bFDN * damage_norm_s * femininity_s +
+      bFMP * min_pressure_s * femininity_s,
+    a ~ dnorm(0,10),
+    bFDN ~ dnorm(0,10),
+    bFMP ~ dnorm(0,10)
+  ),
+  data=d
+)
+```
+```{r}
+precis(mh3.interaction)
+```
+
+So the expected effect of femininity increases as the level of the storm increases.
+
+```{r}
+compare(mh1.fem, mh3.main, mh3.interaction, mh3.main.interaction)
+```
+
+
+
+The main effect model holds all the weight. What happens if we remove femininity as a predictor?
+
+```{r, results='hide'}
+mh3.main._fem <- map2stan(
+  alist(
+    deaths <- dpois(lambda),
+    log(lambda) <- a + bDN * damage_norm_s +
+      bMP * min_pressure_s,
+    a ~ dnorm(0,10),
+    bDN ~ dnorm(0,10),
+    bMP ~ dnorm(0,10)
+  ),
+  data=d
+)
+```
+```{r}
+precis(mh3.main._fem)
+```
+```{r}
+compare(mh3.main, mh3.main._fem)
+```
+
+Let me try to fit the same model with `brms`. Here is the main femininity model:
+
+
+```{r,results='hide'}
+library(brms)
+
+mod.fem <- brm(deaths ~ femininity, data = d, family = "poisson",
+               prior = set_prior("normal(0,10)", class='b'))
+
+```
+```{r}
+summary(mod.fem)
+library(modelr)
+library(tidybayes)
+```
+
+```{r, fig.align='center', fig.height=4, fig.width=4}
+d %>%
+  data_grid(femininity = seq_range(femininity, n = 100)) %>%
+  add_predicted_samples(mod.fem) %>% 
+  mean_qi(pred.deaths=pred) %>%
+  ggplot(aes(x=femininity)) +
+  geom_line(aes(y=pred.deaths)) + 
+  geom_ribbon(aes(x=femininity, ymin=conf.low, ymax=conf.high),
+              alpha = 0.4, fill = "grey60") +
+  geom_point(aes(y=deaths), data=d)
+```
+
+Now, let's try to setup the main and interaction effect model:
+
+```{r, results='hide'}
+mod.inter <- brm(deaths ~ femininity_s*damage_norm_s + 
+                   femininity_s*min_pressure_s, data = d, 
+                 family = "poisson", 
+                 prior = set_prior("normal(0,10)", class='b'))
+```
+```{r}
+summary(mod.inter)
+```
+
+Here is standardized femininity of hurricane names predicting number of deaths. Each grid is based on standard deviations of damage and minimum pressure at -1.5, 0, and 1.5
+
+```{r}
+# I want to facet wrap and make a data_grid of predicted femininity with standard deviations of damage_norm_s and other predictor
+
+d %>%
+  data_grid(femininity_s = seq_range(femininity_s, n = 100),
+            damage_norm_s = c(-1.5, 0, 1.5),
+            min_pressure_s = c(-1.5, 0, 1.5)) %>%
+  add_predicted_samples(mod.inter) %>%
+  mean_qi(pred.deaths = pred) %>%
+  ggplot(aes(x=femininity_s)) +
+  geom_line(aes(y=pred.deaths)) + 
+  geom_ribbon(aes(x=femininity_s, ymin=conf.low, ymax=conf.high),
+              alpha = 0.4, fill = "grey60") +
+  facet_wrap(damage_norm_s~min_pressure_s,
+             labeller = 'label_both')
+```
+
+We actually see the hypothesized effect; when damage norm is high, and minimum pressure low, an increase in femininity actually increases the death count. 
+
+Let's consider one more model just with the main effects:
+
+```{r, results='hide'}
+mod.main <- brm(deaths ~ femininity_s + damage_norm_s + 
+                   min_pressure_s, data = d, 
+                 family = "poisson", 
+                 prior = set_prior("normal(0,10)", class='b'))
+```
+
+And compare all the models:
+
+```{r}
+LOO(mod.fem, mod.main, mod.inter)
+```
+
+And lastly, let's take a look at the counterfactual plot the of main multiple regression effect: it should be similar to what we see in the interaction model, but the slope of femininity should not change relative to the other conditions.
+
+```{r}
+d %>%
+  data_grid(femininity_s = seq_range(femininity_s, n = 100),
+            damage_norm_s = c(-1.5, 0, 1.5),
+            min_pressure_s = c(-1.5, 0, 1.5)) %>%
+  add_predicted_samples(mod.main) %>%
+  mean_qi(pred.deaths = pred) %>%
+  ggplot(aes(x=femininity_s)) +
+  geom_line(aes(y=pred.deaths)) + 
+  geom_ribbon(aes(x=femininity_s, ymin=conf.low, ymax=conf.high),
+              alpha = 0.4, fill = "grey60") +
+  facet_wrap(damage_norm_s~min_pressure_s,
+             labeller = 'label_both')
+```
+
+
+
+## 11H4
+
+Let's take a look at the logarithm of damage norm and see how it impacts that models. 
+
+We will test both the main effect and interaction model worked previously.
+
+```{r}
+d$log_damage_norm <- log(d$damage_norm)
+d$log_damage_norm_s <- (d$log_damage_norm - mean(d$log_damage_norm))/
+  sd(d$log_damage_norm)
+```
+
+
+```{r, results='hide'}
+mod.main.log <- brm(deaths ~ femininity_s + log_damage_norm_s + 
+                   min_pressure_s, data = d, 
+                 family = "poisson", 
+                 prior = set_prior("normal(0,10)", class='b'))
+```
+```{r}
+summary(mod.main.log)
+```
+
+The estimated effect of log damage is much higher, and seems to eliminate the contribution of minimum pressure to the number of deaths. For minimum pressure, we have a rather narrow confidence interval on either side of zero. 
+
+```{r, results='hide'}
+mod.inter.log <- brm(deaths ~ femininity_s*log_damage_norm_s + 
+                   femininity_s*min_pressure_s, data = d, 
+                 family = "poisson", 
+                 prior = set_prior("normal(0,10)", class='b'))
+```
+```{r}
+summary(mod.inter.log)
+```
+
+At average levels of log damage and minimum pressure, femininity contributes very little to the impact of the storm. However, as log damage increases, the effect of femininity remains. 
+
+Let's graph the outcomes. For the main effects,
+
+```{r}
+d %>%
+  data_grid(femininity_s = seq_range(femininity_s, n = 100),
+            log_damage_norm_s = c(-1.5, 0, 1.5),
+            min_pressure_s = c(-1.5, 0, 1.5)) %>%
+  add_predicted_samples(mod.main.log) %>%
+  mean_qi(pred.deaths = pred) %>%
+  ggplot(aes(x=femininity_s)) +
+  geom_line(aes(y=pred.deaths)) + 
+  geom_ribbon(aes(x=femininity_s, ymin=conf.low, ymax=conf.high),
+              alpha = 0.4, fill = "grey60") +
+  facet_wrap(log_damage_norm_s~min_pressure_s,
+             labeller = 'label_both')
+```
+
+For the interaction model,
+
+```{r}
+d %>%
+  data_grid(femininity_s = seq_range(femininity_s, n = 100),
+            log_damage_norm_s = c(-1.5, 0, 1.5),
+            min_pressure_s = c(-1.5, 0, 1.5)) %>%
+  add_predicted_samples(mod.inter.log) %>%
+  mean_qi(pred.deaths = pred) %>%
+  ggplot(aes(x=femininity_s)) +
+  geom_line(aes(y=pred.deaths)) + 
+  geom_ribbon(aes(x=femininity_s, ymin=conf.low, ymax=conf.high),
+              alpha = 0.4, fill = "grey60") +
+  facet_wrap(log_damage_norm_s~min_pressure_s,
+             labeller = 'label_both')
+```
+
+Based on both sets of graph, it is clear that femininity is only a significant factor when when log damage is high: at 1.5 standard deviations from average. 
+
+What if we exclude the femininity predictor?
+
+```{r, results='hide'}
+mod.main._fem <- brm(deaths ~ log_damage_norm_s + min_pressure_s, data = d, 
+                 family = "poisson", 
+                 prior = set_prior("normal(0,10)", class='b'))
+```
+```{r}
+summary(mod.main._fem)
+```
+
+Now testing predictive accuracy:
+
+```{r}
+LOO(mod.main.log, mod.inter.log, mod.main._fem)
+```
+
+So what is going on? Femininity is only a successful predictor of log damage when the storms already are 1.5 standard deviations above average log damage. It could be that more strong storms happen to be named female. 
+
+For example, let's look at the proportion of female named storms over quantiles of log damage:
+
+```{r}
+# proportion of females with high log damage
+above_ave_female <- NROW(d$Observation[d$female==1 & d$log_damage_norm_s > 0])
+total_above_ave <- NROW(d$Observation[d$log_damage_norm_s > 0])
+above_ave_female/total_above_ave
+```
+
+We need to think less statistically and scientifically about this measure. Is there continuous measurement of femininity valid? If we us a dichotomous male/female variable, do we see the same effects?
+
+```{r, results='hide'}
+mod.interact.dich <- brm(deaths ~ log_damage_norm_s*female + 
+                           min_pressure_s*female, data = d, 
+                 family = "poisson", 
+                 prior = set_prior("normal(0,10)", class='b'))
+```
+```{r}
+summary(mod.interact.dich)
+```
+
+Looking at the summary, we still see the interaction with log damage, for high values of log damage. Let's see the plot:
+
+```{r}
+d %>%
+  data_grid(female = c(0,1),
+            log_damage_norm_s = seq_range(log_damage_norm_s, n=100),
+            min_pressure_s = c(-1.5, 0, 1.5)) %>%
+  add_predicted_samples(mod.interact.dich) %>%
+  mean_qi(pred.deaths = pred) %>%
+  ggplot(aes(x=log_damage_norm_s)) +
+  geom_line(aes(y=pred.deaths)) + 
+  geom_ribbon(aes(x=log_damage_norm_s, ymin=conf.low, ymax=conf.high),
+              alpha = 0.4, fill = "grey60") +
+  facet_wrap(female~min_pressure_s,
+             labeller = 'label_both')
+```
+
+So we still see the effect with a dichotomous female variable. 
+
+But we need to think about these studies beyond the statistical set of tools. For example, let's ask if the men hurricanes were female, what would be the predicted change in deaths? 
+
+Let's look at a counterfactual exchanging Andrew and Diane:
+
+```{r}
+d[d$name=='Andrew',]
+```
+
+What if Andrew had Diane's femininity?
+
+```{r}
+d %>%
+  data_grid(femininity_s = d$femininity_s[d$name=='Diane'],
+            log_damage_norm_s = 1.65147,
+            min_pressure_s = -2.250842) %>%
+  add_predicted_samples(mod.inter.log) %>%
+  mean_qi(pred.deaths = pred) %>%
+  ungroup() %>%
+  select(pred.deaths, conf.low, conf.high)
+```
+
+```{r}
+d %>%
+  data_grid(femininity_s = d$femininity_s[d$name=='Diane'],
+            damage_norm_s = 4.597172,
+            min_pressure_s = -2.250842) %>%
+  add_predicted_samples(mod.inter) %>%
+  mean_qi(pred.deaths = pred) %>%
+  ungroup() %>%
+  select(pred.deaths, conf.low, conf.high)
+```
+
+On the log model, we see an estimated 169 deaths, and 279 deaths in the main model. By this model's assumptions, one of the main factors that leads to death by hurricane is the femininity of the name, which is absurd.
+
+Likewise, how sensitive is the model to removing outliers?
+
+```{r, results='hide'}
+d.rm_out <- d %>%
+  filter(name != 'Andrew', name != 'Diane')
+
+mod.rm_out <- brm(deaths ~ log_damage_norm_s*femininity_s + 
+                           min_pressure_s*femininity_s, data = d.rm_out, 
+                 family = "poisson", 
+                 prior = set_prior("normal(0,10)", class='b'))
+```
+```{r}
+summary(mod.rm_out)
+```
+
+Here, femininity has no real effect, interaction or otherwise.
+
+
+## 11H5
+Are women (descriptively) more concerned about avoiding harm?
+
+We will use the Trolley data and the contact predictor. We want to see if women are more or less bothered by contact than men.
+
+```{r}
+data(Trolley)
+d <- Trolley
+```
+
+Let's start by with some exploratory data analysis:
+
+```{r}
+ggplot(d) +
+  geom_histogram(aes(x=response, fill=as.factor(male)), position = 'identity',
+                 alpha=0.3)
+```
+
+Overall, men were more likely to say something is morally permissible (5, 6, 7). However, they are also more likely to say that something is definitely not morally permissible (1). 
+
+Let's compare counts by contact:
+```{r}
+ggplot(d) + 
+  geom_bar(aes(x=as.factor(response), fill=as.factor(male)), position = 'dodge') +
+  facet_wrap(~contact)
+```
+
+Overall, the proportions look comparable. Let's try a `brms` model. First let's see if we recover the estimates from the Chapter 11 notes:
+
+```{r, results='hide'}
+mod.chp11 <- brm(response ~ action*intention + contact*intention, data=d,
+               family=cumulative("logit"), threshold="flexible",
+               prior=set_prior("normal(0,10)", class='b'))
+```
+```{r}
+summary(mod.chp11)
+```
+
+This is exactly the same model as we fit in the chapter 11 notes.
+
+Then let's include male as a main effect.
+
+```{r, results='hide'}
+mod.male.main <- brm(response ~ male + action*intention
+                      + contact*intention, data=d,
+               family=cumulative("logit"), threshold="flexible",
+               prior=set_prior("normal(0,10)", class='b'))
+```
+```{r}
+summary(mod.male.main)
+```
+
+Based on the summary, the results show there is a reliable positive effect for males. Indeed, that is what we saw on the histogram; males tended to choose 5,6, and 7 more than women. Based on our previous model, every condition in the story (action, intention, and contact) decreased the moral permissiveness and that is replicated. 
+
+To address our hypothesis, we need to test the interaction between males and contact. If the hypothesis is true, we should see a positive interaction term, because women do not like contact. 
+
+```{r, results='hide'}
+mod.male.contact <- brm(response ~ male*contact, data=d,
+               family=cumulative("logit"), threshold="flexible",
+               prior=set_prior("normal(0,10)", class='b'))
+```
+```{r}
+summary(mod.male.contact)
+```
+
+Here, a contact story pushes the model response down, but it is still more morally permissible than the females response. Based on these parameters alone, it clear that men have different average tendencies, but it is not clear that the contact specifically is less morally permissible for women. 
+
+It also makes sense to model the male interaction with the full model:
+
+```{r, results='hide'}
+mod.male.contact.int <- brm(response ~ action*intention 
+                     + intention*contact + male*contact, data=d,
+               family=cumulative("logit"), threshold="flexible",
+               prior=set_prior("normal(0,10)", class='b'))
+```
+```{r}
+summary(mod.male.contact.int)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Let's plot some of these models. First, we'll start with the male-contact model:
+
+```{r}
+pred.df <- d %>%
+  data_grid(male = c(0,1),
+            contact = c(0,1)) %>%
+  add_predicted_samples(mod.male.contact)
+```
+```{r}
+pred.df %>% mean_qi(pred.response=pred) %>%
+  ggplot(aes(x=as.factor(contact), group=as.factor(male), color=as.factor(male))) +
+  geom_line(aes(y=pred.response))
+pred.df %>% mean_qi(pred.response=pred)
+```
+
+As the average predicted response for contact stories is lower for women than it is for mean. The problem lies in the model and we need a better technique to pull out the probabilities of the distribution, not the predictions. In other models, they are one in the same. What we want to look at the cumulative probability for each response.
+
+We can get that with the following:
+
+```{r}
+d.probs <- d %>%
+  data_grid(male = c(0,1),
+            contact = c(0,1)) %>%
+  add_fitted_samples(mod.male.contact) %>%
+  mean_qi(response.prob=estimate)
+```
+
+```{r}
+d.probs %>% 
+  ggplot(aes(x=category, group=as.factor(male), color=as.factor(male))) + 
+  geom_pointrange(aes(y=response.prob, ymin=conf.low, ymax=conf.high)) + 
+  geom_line(aes(y=response.prob)) +
+  facet_wrap(~contact, labeller = 'label_both')
+```
+
+So answering the hypothesis, are women more or less bothered by contact by mean? As we saw before, on the average response level women were more bothered. When we break out to individual responses, women are more likely to give a 'not morally permissible' reponse P(Y<4) than men, and men are more likely to give a `morally permissible' response P(Y>4).
+
+Let's try one more graph:
+```{r}
+d.probs <- d.probs %>%
+  ungroup() %>% group_by(male, contact) %>%
+  mutate(cumsum.response=cumsum(response.prob)) %>%
+  mutate(cumsum.low=cumsum(conf.low)) %>%
+  mutate(cumsum.high=cumsum(conf.high)) %>% ungroup()
+```
+
+```{r}
+library(directlabels)
+d.probs %>% 
+  ggplot(aes(x=as.factor(contact), y=cumsum.response,
+             group=interaction(as.factor(category), as.factor(male)),
+             color=as.factor(male))) +
+  geom_line() + 
+  geom_ribbon(aes(ymin=cumsum.low, ymax=cumsum.high),
+              alpha = 0.4, fill = "grey60", color=NA) + 
+  geom_dl(aes(label=as.factor(category)), method = 'first.points')
+```
+
+Now that we've figured out how to make the cumulative probability plot, we can show the full interaction model to test our hypothesis:
+
+```{r}
+d.probs <- d %>%
+  data_grid(male = c(0,1),
+            contact = c(0,1),
+            action = c(0,1),
+            intention = c(0,1)) %>%
+  add_fitted_samples(mod.male.contact.int) %>%
+  mean_qi(response.prob=estimate)
+
+d.probs <- d.probs %>%
+  ungroup() %>% group_by(male, contact, action, intention) %>%
+  mutate(cumsum.response=cumsum(response.prob)) %>%
+  mutate(cumsum.low=cumsum(conf.low)) %>%
+  mutate(cumsum.high=cumsum(conf.high)) %>% ungroup()
+
+d.probs %>% 
+  ggplot(aes(x=as.factor(contact), y=cumsum.response,
+             group=interaction(as.factor(category), as.factor(male)),
+             color=as.factor(male))) +
+  geom_line() + 
+  facet_wrap(action~intention, labeller = 'label_both') + 
+  geom_dl(aes(label=as.factor(category)), method = 'first.points')
+```
+
+
+## 11H6
+
+```{r}
+data(Fish)
+d <- Fish %>% as.tibble()
+head(d)
+d <- d %>% as.data.frame()
+```
+
+Our goal is to model fish_caught as a Poisson model. Clearly there will be a zero-inflated term. Some people park goers aren't fishing at all. Moreover, there is the `hours` variable that says how long each person was in the park. We need to incorporate the rate into the model as described in chapter 10. 
+
+To start, let's look at the model we used in chapter 11 for zero-inflated Poisson processes:
+
+Before we fit, let's set up multiple cores:
+
+```{r}
+rstan_options (auto_write=TRUE)
+options (mc.cores=parallel::detectCores ()) # Run on multiple cores
+```
+
+Now that we have a baseline model, what do we expect the predictors to be? Livebait has to be a predictor for the count of fish. We are also going to include log_hours to adjust exposure, but I would also guess the number of hours is correlated to number of fish. 
+
+Lets do some graphical exploration:
+
+```{r, fig.align='center', fig.height=4, fig.width=4}
+ggplot(d) + 
+  geom_point(aes(x=hours, y=fish_caught)) +
+  facet_wrap(~livebait)
+```
+```{r, fig.align='center', fig.height=4, fig.width=4}
+ggplot(d) + 
+  geom_point(aes(x=persons, y=fish_caught)) + 
+  facet_wrap(~camper)
+```
+
+Makes sense. More people, more fish caught. 
+
+```{r, fig.align='center', fig.height=4, fig.width=4}
+ggplot(d) + 
+  geom_point(aes(x=child, y=fish_caught)) + 
+  facet_wrap(~camper)
+```
+
+People with children don't have time to fish.
+
+In both cases, it seems camping might have a small effect. Furthermore, looking at the color, live bait might not be such a good predictor, but we'll include it as a main effect. It looks like most people fishing use live bait. 
+
+```{r}
+NROW(d$livebait[d$livebait==1])
+NROW(d$livebait[d$livebait==0])
+```
+
+```{r}
+# need to use `offset` in brms formula.
+# It forces coefficient to 1 during regression
+```
+
+Now let's adapt the model we used in chapter 11:
+
+```{r, results='hide'}
+d$loghours <- log(d$hours)
+m11h6.baseline <- map2stan(
+  alist(
+    fish_caught ~ dzipois(p, lambda),
+    logit(p) <- zi + zC*child,
+    log(lambda) <- loghours + al + bC*camper + bP*persons + bCh*child,
+    c(zi, al) ~ dnorm(0, 10),
+    c(zC, bC, bP, bCh) ~ dnorm(0, 10)
+  ), data = d, chains = 4, warmup = 1000, iter = 4000)
+```
+```{r}
+precis(m11h6.baseline)
+```
+
+And in `brms`:
+```{r, results='hide'}
+mod.brms <- brm(bf(fish_caught ~ persons + camper + child + offset(log(hours)), 
+                   zi ~ child), 
+                data=d, family=zero_inflated_poisson(),
+                prior = c(set_prior("normal(0,10)", class = 'b'),
+                          set_prior("normal(0,10)", class = 'Intercept'),
+                          set_prior("normal(0,10)", dpar = 'zi'),
+                          set_prior("normal(0,10)", class = 'Intercept', 
+                                    dpar = 'zi')),
+                iter=4000, seed = sample(1e+7, size = 1))
+```
+```{r}
+summary(mod.brms)
+```
+
+```{r}
+d.pred <- d %>% 
+  data_grid(persons = c(1,2,3,4),
+            camper = c(0,1),
+            child = c(0,1,2,3),
+            hours = seq_range(hours, n=10)) %>%
+  add_predicted_samples(mod.brms) %>%
+  mean_qi()
+```
+```{r}
+plot(marginal_effects(mod.brms))
+```
+```{r}
+ggplot(d.pred) + 
+  aes(x=persons, y=pred) +
+  geom_line() +
+  facet_wrap(child~camper, labeller = 'label_both')
+```
+
+The predictions for a group with 3 children and 3 or 4 people are way to high. For persepective, here is the observed ranges:
+
+```{r}
+quantile(d$fish_caught)
+d[d$fish_caught==149,]
+```
+
+In reality, we should see very few fish caught, regardless of the combination. The marginal effects plot seem to have more tempered predictions, but they only plot against the average effect. 
+
+```{r}
+d.pred.child <- d %>%
+  data_grid(child = c(0,1,2,3),
+            persons=4,
+            camper=0,
+            hours=mean(hours)) %>%
+  add_predicted_samples(mod.brms) %>%
+  mean_qi()
+```
+```{r}
+d.pred.child
+quantile(d.pred.child$pred)
+```
+
+This looks more normal after controlling for hours. The full plot with average hours:
+
+```{r}
+d.pred <- d %>% 
+  data_grid(persons = c(1,2,3,4),
+            camper = c(0,1),
+            child = c(0,1,2,3),
+            hours = mean(hours)) %>%
+  add_predicted_samples(mod.brms) %>%
+  mean_qi()
+```
+```{r}
+ggplot(d.pred) + 
+  aes(x=persons, y=pred) +
+  geom_line() +
+  facet_wrap(child~camper, labeller = 'label_both')
+```
+We get way more sensible predictions.
+
+We can also include some variation in the number of hours: 
+```{r}
+d.pred <- d %>% 
+  data_grid(persons = c(1,2,3,4),
+            camper = c(0,1),
+            child = c(0,1,2,3),
+            hours = c(mean(hours), 
+                      mean(hours) + 2*sd(hours))) %>%
+  add_predicted_samples(mod.brms) %>%
+  mean_qi()
+```
+```{r}
+ggplot(d.pred) + 
+  aes(x=persons, y=pred, color=hours, group=hours) +
+  geom_line() +
+  facet_grid(child~camper, labeller = 'label_both')
+```
+
+
+
+

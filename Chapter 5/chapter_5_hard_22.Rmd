@@ -1,0 +1,244 @@
+---
+title: "Chapter_5_Hard"
+output:
+  html_document:
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+## Chapter 5 Hard
+We'll be working with
+```{r, echo=TRUE, results='asis'}
+library(tidyverse)
+library(rethinking)
+data(foxes)
+d <- foxes
+```
+### 5H1
+First, we need to fit the model for `weight~area`:
+
+```{r, echo=FALSE}
+d$area.s = (d$area - mean(d$area))/sd(d$area)
+m.w.a <- map(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- a + bA * area.s,
+    a ~ dnorm(0,10),
+    bA ~ dnorm(0,10),
+    sigma ~ dunif(0,10)
+  ),
+  data = d
+)
+precis(m.w.a)
+```
+With the percentile interval of the mean:
+
+```{r, echo=FALSE, results='hide'}
+a.seq <- seq(from=-3, to=3, length.out=100)
+mu <- link(m.w.a, data=data.frame(area.s=a.seq))
+mu.PI <-apply(mu, 2, PI)
+
+# no apparent effect
+plot(weight~area.s, data=d, col=rangi2)
+abline(m.w.a)
+shade(mu.PI, a.seq)
+```
+
+For the model `weight~groupsize` we get
+```{r, echo=FALSE}
+m.w.gs <- map(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- a + bGS * groupsize,
+    a ~ dnorm(0,10),
+    bGS ~ dnorm(0,10),
+    sigma ~ dunif(0,10)
+  ),
+  data = d
+)
+precis(m.w.gs)
+```
+with 95% interval 
+
+```{r, echo=FALSE, results='hide'}
+gs.seq <- seq(from=2, to=8, length.out=100)
+mu <- link(m.w.gs, data=data.frame(groupsize=gs.seq))
+mu.PI <-apply(mu, 2, PI)
+
+# no apparent effect
+plot(weight~groupsize, data=d, col=rangi2)
+abline(m.w.gs)
+shade(mu.PI, gs.seq)
+```
+Group size seems to negatively effect individual weight a small amount, while the terrority (area) of the group seems to have no relation to the weight of individuals. 
+
+### 5H2
+
+Now we are going to fit a multiple regression predicting weight based on both area and groupsize. 
+
+```{r, echo=FALSE}
+m.w.gs.a <- map(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- a + bGS * groupsize + bA * area.s,
+    a ~ dnorm(0,10),
+    bGS ~ dnorm(0,10),
+    bA ~ dnorm(0,10),
+    sigma ~ dunif(0,10)
+  ),
+  data = d
+)
+precis(m.w.gs.a)
+```
+Based on the summary, the multiple regression has both area and group size reliability predicting an effect on weight. 
+
+Next, fixing group size at its mean, we plot the predicted weight over area.
+
+```{r,echo=FALSE, results='hide'}
+gs.val <- mean(d$groupsize)
+a.seq <- seq(from=-3, to=3, length.out=100)
+pred.data = data.frame(area.s=a.seq, groupsize=gs.val)
+mu <- link(m.w.gs.a, data=pred.data)
+mu.PI <-apply(mu, 2, PI)
+mu.mean <- apply(mu, 2, mean)
+
+weight.sim <- sim(m.w.gs.a, data=pred.data, n=1e4)
+weight.PI <- apply(weight.sim, 2, PI)
+
+# no apparent effect
+plot(weight~area.s, data=d, type='n', main=paste("Group size is ", mean(d$groupsize)))
+lines(a.seq, mu.mean)
+shade(mu.PI, a.seq)
+shade(weight.PI, a.seq)
+```
+
+Next, fixing the average area, we plot the predicted weight over group size.
+
+```{r echo=FALSE, results='hide'}
+a.val <- mean(d$area.s)
+gs.seq <- seq(from=2, to=8, length.out=100)
+pred.data = data.frame(area.s=a.val, groupsize=gs.seq)
+mu <- link(m.w.gs.a, data=pred.data)
+mu.PI <-apply(mu, 2, PI)
+mu.mean <- apply(mu, 2, mean)
+
+weight.sim <- sim(m.w.gs.a, data=pred.data, n=1e4)
+weight.PI <- apply(weight.sim, 2, PI)
+
+# no apparent effect
+plot(weight~groupsize, data=d, type='n', main=paste("Area is ", mean(d$area)))
+lines(gs.seq, mu.mean)
+shade(mu.PI, gs.seq)
+shade(weight.PI, gs.seq)
+```
+To interpret these results, recall the residual analysis in chapter 5. If area is higher than the group size would predict, then there is a positive effect on individuals weight. Likewise, if group size is larger than area would predict, then the weight goes down. 
+
+
+```{r}
+m2 = lm(groupsize~area.s, data=d)
+plot(groupsize~area.s, data=d)
+abline(m2)
+```
+With the plots, we may better understand this intrepretation. For a given area, if the group size that an individual belongs to is above average, his weight is likely lower. For a group that is bigger than the area would expect, each individual is going to have access to fewer resources. 
+
+## 5H3
+
+Next, we consider average food as a predictor on weight. First, we'll consider the model `weight~avgfood + groupsize`.
+
+```{r, echo=FALSE}
+d$avgfood.s = (d$avgfood - mean(d$avgfood))/sd(d$avgfood)
+m.w.gs.af <- map(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- a + bGS * groupsize + bAF * avgfood.s,
+    a ~ dnorm(0,10),
+    bGS ~ dnorm(0,10),
+    bAF ~ dnorm(0,10),
+    sigma ~ dunif(0,10)
+  ),
+  data = d
+)
+precis(m.w.gs.af)
+```
+
+Based on the means, both group size and average food now seem to be more strongly predict a weight decrease and increase respectively. My hypothesis is that average food and territory are collinear. Likely, both variables measure the same thing, as average available food probably increases with the size of the territory. Before we proceed, we can verify with a simple plot:
+
+```{r}
+plot(avgfood~area, data=d)
+```
+
+Next, we'll directly test this hypothesis with the model `weight~avgfood + groupsize + area'. If our idea is correct and the variables are collinear, we should see a change in the means and a drastic change in standard deviations. 
+
+```{r, echo=FALSE}
+m.w.gs.af.a <- map(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- a + bGS * groupsize + bAF * avgfood.s + bA * area.s,
+    a ~ dnorm(0,10),
+    bGS ~ dnorm(0,10),
+    bAF ~ dnorm(0,10),
+    bA ~ dnorm(0,10),
+    sigma ~ dunif(0,10)
+  ),
+  data = d
+)
+precis(m.w.gs.af.a)
+```
+
+There is a slight increase in standard deviations in both average food and area, and their effects are smaller. Really telling is the confidence intervals. Both area and average food are almost consistent with no effect, which is very different than their individual regressions.
+
+If I could only choose average food or area as a predictor I would choose average food. Think about it in terms of the residual interpretation. If average available food is above the expected available food based on group size, weight increases much more. And it is the same in the other direction: if group size is larger than one would expect given the amout of food, weight decreases more than the same relation with territory. This makes sense from a theoretical standpoint: more food means more weight. Furthermore, the size of the territory is an indicator of more available food.
+
+We can visualize this added uncertainity when regressing with both average food and area by plotting counterfactuals.
+
+Fixing group size and average food to their mean we get:
+
+```{r,echo=FALSE, results='hide'}
+gs.val <- mean(d$groupsize)
+af.val <- mean(d$avgfood.s)
+a.seq <- seq(from=-3, to=3, length.out=100)
+pred.data = data.frame(area.s=a.seq, groupsize=gs.val, avgfood.s=af.val)
+mu <- link(m.w.gs.af.a, data=pred.data)
+mu.PI <-apply(mu, 2, PI)
+mu.mean <- apply(mu, 2, mean)
+
+weight.sim <- sim(m.w.gs.af.a, data=pred.data, n=1e4)
+weight.PI <- apply(weight.sim, 2, PI)
+
+# no apparent effect
+plot(weight~area.s, data=d, type='n')
+lines(a.seq, mu.mean)
+shade(mu.PI, a.seq)
+shade(weight.PI, a.seq)
+```
+
+And fixing area and group size to their mean we have:
+
+```{r,echo=FALSE, results='hide'}
+gs.val <- mean(d$groupsize)
+a.val <- mean(d$area.s)
+af.seq <- seq(from=-2, to=3, length.out=100)
+pred.data = data.frame(area.s=a.val, groupsize=gs.val, avgfood.s=af.seq)
+mu <- link(m.w.gs.af.a, data=pred.data)
+mu.PI <-apply(mu, 2, PI)
+mu.mean <- apply(mu, 2, mean)
+
+weight.sim <- sim(m.w.gs.af.a, data=pred.data, n=1e4)
+weight.PI <- apply(weight.sim, 2, PI)
+
+# no apparent effect
+plot(weight~avgfood.s, data=d, type='n')
+lines(a.seq, mu.mean)
+shade(mu.PI, a.seq)
+shade(weight.PI, a.seq)
+```
+
+
+
+
+
+
+

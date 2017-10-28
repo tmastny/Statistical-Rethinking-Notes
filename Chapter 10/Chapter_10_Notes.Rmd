@@ -1,0 +1,584 @@
+---
+title: "Chapter 10 Notes"
+author: "Tim"
+date: "10/11/2017"
+output: 
+  html_document:
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, 
+                      results='show', cache=TRUE, autodep=TRUE)
+```
+
+## 10.1 Binomial Regression
+
+#### Logistic Regression
+
+```{r}
+library(rethinking)
+data("chimpanzees")
+d <- chimpanzees
+```
+
+We will think about predicting pulled left with prosoc left and condition as predictors. The proso left is if the prosocial option was on the left (whether or not there was another monkey) and condition is if there was another monkey.
+
+With the logistic regression model, we want to model the probability that the left pulls left. My idea is that we can get a baseline leftedness for the group of monkeys, by seeing the average probability that they pull left without a partner (no condition). 
+
+Likewise, we can test if the there is an effect of the prosocial option; in other words, without a partner, do they pull left in the same proportion when the prosocial option is on left or right?
+
+Then we can see if adding a partner encourages them to choose the prosocial option, regardless whether it is left or right.
+
+Before we jump into the full model, let's do some test models:
+
+```{r}
+m10.1 <- map(
+  alist(
+    pulled_left ~ dbinom(1,p),
+    logit(p) <- a,
+    a ~ dnorm(0,10)
+  ),
+  data=d
+)
+precis(m10.1)
+```
+Recall that the model summary is in log-odds. To interpret,
+
+```{r}
+logistic(0.32)
+logistic(c(0.18,0.46))
+```
+
+There is an inherent bias for chimps pulling left.
+
+Next,
+
+```{r}
+m10.2 <- map(
+  alist(
+    pulled_left <- dbinom(1, p),
+    logit(p) <- a + bp * prosoc_left,
+    a ~ dnorm(0,10),
+    bp ~ dnorm(0,10)
+  ),
+  data=d
+)
+precis(m10.2)
+```
+
+```{r}
+m10.3 <- map(
+  alist(
+    pulled_left <- dbinom(1, p),
+    logit(p) <- a + (bp + bpC * condition) * prosoc_left,
+    a ~ dnorm(0,10),
+    bp ~ dnorm(0,10),
+    bpC ~ dnorm(0,10)
+  ),
+  data=d
+)
+precis(m10.3)
+```
+```{r}
+compare(m10.1,m10.2,m10.3)
+```
+The comparison gives a surprising answer. Apparently the ability to predict whether the monkey pulls left only weakly depends on whether there is another monkey across the table!
+
+Looking at the model summary of model 10.3, we see that the condition is negative, but with consistent numbers well over zero. 
+
+Next, let's consider the **proportional change in odds**. 
+```{r}
+# parameter bp in m10.3
+exp(0.61)
+```
+So there is a proportional increase of 1.84 in the odds of pulling the left-hand lever, or that odds increased by 84%.
+
+The problem to remember is that logistic regress 'squeezes' values. For example, if $\alpha$ was 4, then
+
+```{r}
+logistic(4)
+logistic(4 + 0.61)
+```
+Results almost to no difference in the probability.
+
+Next, let's consider the average predictions:
+```{r, results='hide'}
+# R Code 10.10
+# Dummy data
+d.pred <- data.frame(
+  prosoc_left = c(0,1,0,1), # right\left\right\left
+  condition = c(0,0,1,1) #control\control\partner\partner
+)
+chimp.ensemble <- ensemble(m10.1, m10.2, m10.3, data=d.pred)
+```
+```{r}
+pred.p.mean <- apply(chimp.ensemble$link, 2 , mean)
+pred.p.PI <- apply(chimp.ensemble$link, 2, PI)
+```
+
+```{r, fig.align='center'}
+plot(0,0, type='n', xlab="prosoc_left/condition",
+     ylab="proportion pulled left", ylim=c(0,1), xaxt='n',
+     xlim=c(1,4))
+axis(1, at=1:4, labels=c("0/0", "1/0", "0/1", "1/1"))
+
+p <- by( d$pulled_left, list(d$prosoc_left, d$condition, d$actor), mean)
+for (chimp in 1:7) {
+  lines(1:4, as.vector(p[,,chimp]), col=rangi2, lwd=1.5)
+}
+
+lines(1:4, pred.p.mean)
+shade(pred.p.PI, 1:4)
+```
+
+Lots of interesting notes on the graph. First, when the partner was across the table, at "0/1", most monkeys went with the social option. Confusingly, the same is not true for when the prosocial option was left at "1/1". Second, they like to pull left when the prosocial option is on the left, regardless of the condition. To me, this seems to support the idea that they do not pull left independent of the option given. 
+
+We will check our model versus a Stan model:
+```{r, results='hide'}
+# clean NAs
+d2 <- d
+d2$recipient <- NULL
+
+m10.3stan <- map2stan(m10.3, data=d2, iter=1e4, warmup=1000)
+```
+```{r}
+precis(m10.3stan)
+```
+We get the same data, which would imply that the posterior is Gaussian. We can check with pairs:
+```{r}
+pairs(m10.3stan)
+```
+
+It is clear we need to adjust for handedness in individual chimps if we want a meaningful model. 
+
+We can give each individual an intercept:
+
+```{r, results='hide'}
+m10.4 <- map2stan(
+  alist(
+    pulled_left <- dbinom(1, p),
+    logit(p) <- a[actor] + (bp + bpC * condition) * prosoc_left,
+    a[actor] ~ dnorm(0,10),
+    bp ~ dnorm(0,10),
+    bpC ~ dnorm(0,10)
+  ),
+  data=d2, chains=2, iter=2500, warmup=500
+)
+```
+```{r}
+precis(m10.4, depth=2)
+```
+Not a Gaussian fit, see the weird results on `a[2]`. We can see this directly:
+```{r}
+post <- extract.samples(m10.4)
+str(post)
+```
+```{r}
+dens(post$a[,2])
+```
+Clearly a non-Gaussian posterior. This indicates that actor 2 is always pulling the left-hand lever, regardless of the predictors.
+
+```{r, fig.align='center', results='hide'}
+par(mfrow=c(2,2))
+for (chimp in c(3, 5, 6, 7)) {
+  d.pred <- data.frame(
+    pulled_left = rep(0,4),
+    prosoc_left = c(0,1,0,1), # right\left\right\left
+    condition = c(0,0,1,1), #control\control\partner\partner
+    actor = rep(chimp,4)
+  )
+  link.m10.4 <- link(m10.4, data=d.pred)
+  
+  pred.p.mean <- apply(link.m10.4, 2 , mean)
+  pred.p.PI <- apply(link.m10.4, 2, PI)
+  
+  plot(0,0, type='n', xlab="prosoc_left/condition",
+       ylab="proportion pulled left", ylim=c(0,1), xaxt='n',
+       xlim=c(1,4))
+  axis(1, at=1:4, labels=c("0/0", "1/0", "0/1", "1/1"))
+  mtext(paste("actor", chimp))
+  
+  p <- by( d$pulled_left, list(d$prosoc_left, d$condition, d$actor), mean)
+
+  lines(1:4, as.vector(p[,,chimp]), col=rangi2, lwd=2)
+  lines(1:4, pred.p.mean)
+  shade(pred.p.PI, 1:4)
+}
+par(mfrow=c(1,1))
+```
+So there is adjustment for individual actors, how does WAIC look?
+
+```{r}
+compare(m10.3, m10.4)
+```
+Recall the warning that the comparison assumption is tenuous with different algorithms.
+
+We will return to this example in the practice, but there are many questions. Does this model allow us to ask given the handedness of individuals, do individuals tend to be prosocial?
+
+#### Aggregated binomial
+
+##### Chimps
+
+Previously, we analyzed one observation per row and tried to find the probability if the chimp pulled the level. We can also aggregate the data and ask given $n$ series of pulls, how likely are they to pull $x \leq n$?
+
+```{r}
+d.aggregated <- aggregate(d$pulled_left, list(prosoc_left=d$prosoc_left, condition=d$condition, actor=d$actor), sum)
+```
+```{r}
+m10.5 <- map(
+  alist(
+    x <- dbinom(18, p),
+    logit(p) <- a + (bp + bpC * condition) * prosoc_left,
+    a ~ dnorm(0,5),
+    bp ~ dnorm(0,5),
+    bpC ~ dnorm(0,5)
+  ),
+  data=d.aggregated
+)
+precis(m10.5)
+```
+And we get the same model and 10.3.
+
+##### Graduate School Admissions
+
+```{r}
+data(UCBadmit)
+d <- UCBadmit
+d
+```
+
+We want to analyze this data for evidence of gender bias.
+
+Note that we could model each admit/reject as a Bernoulli trial, based on the successful entrance. However, can also model it as a Binomial distribution: Where the number of trials equals the number of applications, and we want to see the number of successses. Given $n$ applications, how many are admitted?
+
+```{r}
+# change male to indicator variable
+d$male <- ifelse(d$applicant.gender=='male', 1, 0)
+
+m10.6 <- map(
+  alist(
+    admit <- dbinom(applications, p),
+    logit(p) <- a + bm * male,
+    a ~ dnorm(0,10),
+    bm ~ dnorm(0,10)
+  ),
+  data=d
+)
+```
+```{r}
+m10.7 <- map(
+  alist(
+    admit <- dbinom(applications, p),
+    logit(p) <- a,
+    a ~ dnorm(0,10)
+  ),
+  data=d
+)
+compare(m10.6, m10.7)
+```
+```{r}
+precis(m10.6)
+```
+
+Predicting admittance based on gender significantly improves expected out of sample deviance. 
+
+Moreover, being a made increases the odds of admittance almost be 2:
+```{r}
+exp(0.61)
+```
+
+But this is only relative odds: We need to look on the absolute scale:
+
+```{r}
+post <- extract.samples(m10.6)
+p.admit.male <- logistic(post$a + post$bm)
+p.admit.female <- logistic(post$a)
+
+# P(male admit) > P(female admit)
+diff.admit <- p.admit.male - p.admit.female
+quantile(diff.admit, c(0.025, 0.5, 0.975))
+```
+```{r}
+dens(diff.admit)
+```
+
+So the males seem to have about a 14% advantage over females. 
+
+```{r}
+postcheck(m10.6, n=1e4)
+
+for (i in 1:6){
+  x <- 1 + 2*(i-1)
+  y1 <- d$admit[x]/d$applications[x]
+  y2 <- d$admit[x+1]/d$applications[x+1]
+  lines(c(x,x+1), c(y1,y2), col=rangi2, lwd=2)
+  text(x + 0.5, (y1+y2)/2 + 0.05, d$dept[x], cex=0.8, col=rangi2)
+}
+```
+
+The blue lines are the actual proportion of students admitted, and the black circles are the predicted proportions, with the pluses the 89% interval. 
+
+The second observation of each department are the females. Which means in departments A, B, D, and F the proportion of female admittances where higher. Moreover, each department is ordered by proportion of applicants admitted. Meaning A,B,C admitted a higher proportion of their applicants.
+
+If we look at the data, we see that more females applied to departments with lower overall admission rates compared to males, which skewed the question the model asked: *what are the average probabilities for admissions in males and females across all departments*. But some departments are more competitive. 
+
+We need a new model to vary across departments:
+
+```{r}
+d$dept_id <- coerce_index(d$dept)
+
+m10.8 <- map(
+  alist(
+    admit <- dbinom(applications, p),
+    logit(p) <- a[dept_id],
+    a[dept_id] ~ dnorm(0,10)
+  ),
+  data=d
+)
+
+m10.9 <- map(
+  alist(
+    admit <- dbinom(applications, p),
+    logit(p) <- a[dept_id] + bm * male,
+    a[dept_id] ~ dnorm(0,10),
+    bm ~ dnorm(0,10)
+  ),
+  data=d
+)
+compare(m10.6, m10.7, m10.8, m10.9)
+```
+
+The new models fit much better, but the model without an adjustment for the male applicants fits slightly worse: they almost split the weight for estimated out of sample deviance.
+
+```{r}
+precis(m10.9, depth=2)
+```
+
+Looking at the average rate of admission for each department, males actually fair slightly worse:
+```{r}
+exp(-0.10)
+```
+
+Just under 1 to 1 odds for admission.
+
+```{r}
+postcheck(m10.9, n=1e4)
+
+for (i in 1:6){
+  x <- 1 + 2*(i-1)
+  y1 <- d$admit[x]/d$applications[x]
+  y2 <- d$admit[x+1]/d$applications[x+1]
+  lines(c(x,x+1), c(y1,y2), col=rangi2, lwd=2)
+  text(x + 0.5, (y1+y2)/2 + 0.05, d$dept[x], cex=0.8, col=rangi2)
+}
+```
+
+The posterior predictions of the new model also better fit the data.
+
+Fitting the model with R's `glm`:
+
+```{r}
+m10.9glm <- glm(cbind(admit, reject)~male + dept, data=d, family=binomial)
+summary(m10.9glm)
+```
+
+## 10.2 Poisson Regression
+
+Possion models are like binomial models, but they model the expected outcome, or the rate. Moreover, even if each observation has different measures of rate (events/day vs. events/week) we can adapt the model to account for those differences.
+
+We are analyzing the number of tools given the population size of islands. We expect larger populations will have more tools. Moreover, contact rate effectively increase population size, and thus potentially the number of tools.
+
+```{r}
+data(Kline)
+d <- Kline
+d
+```
+
+```{r}
+d$log_pop <- log(d$population)
+d$contact_high <- ifelse(d$contact=='high', 1, 0)
+
+m10.10 <- map(
+  alist(
+    total_tools ~ dpois(lambda),
+    log(lambda) ~ a + bp*log_pop +
+      bc*contact_high + bpc*contact_high*log_pop,
+    a ~ dnorm(0,100),
+    c(bp,bc,bpc) ~ dnorm(0,1)
+  ),
+  data=d
+)
+```
+```{r}
+precis(m10.10, corr=TRUE)
+```
+```{r, fig.align='center', fig.height=2, fig.width=4}
+plot(precis(m10.10))
+```
+```{r}
+exp(0.26)
+```
+
+Reading just the table or the plot, you might conclude that contact has little to no impact on tool count, but that isn't the case. As always, we need to sample the posterior for the real results.
+
+Consider a counterfactual island of log population 8, `exp(8)`. We can calculate lambda, the tool count, for a both a high contact and low contact island with log pop 8:  
+
+```{r}
+post <- extract.samples(m10.10)
+
+# two islands with log pop 8
+# tool count for island with high contact
+lambda_high <- exp(post$a + post$bc + (post$bp + post$bpc)*8)
+
+# tool count for island with low contact
+lambda_low <- exp(post$a + post$bp*8)
+
+# probability high contact has more tools than low contact:
+diff <- lambda_high - lambda_low
+sum(diff > 0)/length(diff)
+```
+
+There is a 95% probability that a high contact island has more tools than a low contact island for a given log population of 8.
+
+Therefore, you can't make conclusions just on a table of estimates, even when given the confidence intervals. The reason we get the uncertainty in the parameter estimates is that both `bc` and `bpc` are strongly negatively correlated at `-0.99`. 
+
+So we have a good result that contact is an importart parameter is the posterior space. But let's compare the estimated prediction rate to other models:
+
+```{r}
+# no interaction
+m10.11 <- map(
+  alist(
+    total_tools ~ dpois(lambda),
+    log(lambda) ~ a + bp*log_pop + bc*contact_high,
+    a ~ dnorm(0,100),
+    c(bp,bc) ~ dnorm(0,1)
+  ),
+  data=d
+)
+```
+
+```{r}
+# no contact rate
+m10.12 <- map(
+  alist(
+    total_tools ~ dpois(lambda),
+    log(lambda) ~ a + bp*log_pop,
+    a ~ dnorm(0,100),
+    c(bp) ~ dnorm(0,1)
+  ),
+  data=d
+)
+```
+
+```{r}
+# no log pop
+m10.13 <- map(
+  alist(
+    total_tools ~ dpois(lambda),
+    log(lambda) ~ a + bc*contact_high,
+    a ~ dnorm(0,100),
+    c(bc) ~ dnorm(0,1)
+  ),
+  data=d
+)
+```
+
+```{r}
+#intercept model
+m10.14 <- map(
+  alist(
+    total_tools ~ dpois(lambda),
+    log(lambda) ~ a,
+    a ~ dnorm(0,100)
+  ),
+  data=d
+)
+```
+```{r, fig.align='center', fig.height=2.5}
+(islands.compare <- compare(m10.10, m10.11, m10.12, m10.13, m10.14, n=1e4))
+plot(islands.compare)
+```
+
+Let's plot the counterfactuals:
+
+```{r}
+# sample sequence to compute over
+log_pop.seq <- seq(from=6, to=13, length.out = 30)
+
+d.pred.h <- data.frame(
+  log_pop=log_pop.seq,
+  contact_high=1
+)
+
+d.pred.l <- data.frame(
+  log_pop=log_pop.seq,
+  contact_high=0
+)
+
+```
+```{r, results='hide'}
+lambda.pred.h <- ensemble(m10.10, m10.11, m10.12, data=d.pred.h)
+lambda.pred.l <- ensemble(m10.10, m10.11, m10.12, data=d.pred.l)
+```
+```{r, fig.align='center', fig.width=4, fig.height=4}
+lambda.med.h <- apply(lambda.pred.h$link, 2, median)
+lambda.PI.h <- apply(lambda.pred.h$link, 2, PI)
+
+lambda.med.l <- apply(lambda.pred.l$link, 2, median)
+lambda.PI.l <- apply(lambda.pred.l$link, 2, PI)
+
+# point character (pch) indicates contact rate (could also use color)
+pch <- ifelse(d$contact_high==1, 16, 1)
+plot(d$log_pop, d$total_tools, col=rangi2, pch=pch,
+     xlab='log-pop', ylab='total tools')
+
+lines(log_pop.seq, lambda.med.h, col=rangi2)
+shade(lambda.PI.h, log_pop.seq, col=col.alpha(rangi2,0.2))
+
+lines(log_pop.seq, lambda.med.l, lty=2)
+shade(lambda.PI.l, log_pop.seq, col=col.alpha('black',0.1))
+```
+
+Plot of log-pop versus total tools, with contact high as blue. You can see the impact of contact levels as the distance between the blue and gray shaded regions.
+
+Note that in principle, it is a good idea to center the quantative variables, especially to avoid the level of correlation we see. 
+
+
+### Multinomial as Poission
+
+There is a cool way to model bi/multi-nomial problems as Possion. Remember, given a constant rate, Poisson distributions model the count of an process with a low probability of success.
+
+Thus, we can model the count of each outcome of interest (success/failure, or many more in the multinomial case):
+
+```{r}
+data(UCBadmit)
+d <- UCBadmit
+```
+```{r}
+d$rej <- d$reject
+m_pois <- map2stan(
+  alist(
+    admit ~ dpois(lambda1),
+    rej ~ dpois(lambda2),
+    log(lambda1) <- a1,
+    log(lambda2) <- a2,
+    c(a1,a2) ~ dnorm(0,100)
+  ),
+  data=d, chains=3, cores=3
+)
+```
+
+Now our model is estimating the count of admits and rejects. Thus the probability is 
+\begin{align*}
+p_{admit} &= \frac{\text{number of admitted}}{\text{number of rejected + number of admitted}} \\
+&= \frac{\lambda_1}{\lambda_1 + \lambda_2}
+\end{align*}
+
+```{r}
+k <- as.numeric(coef(m_pois))
+exp(k[1])/(exp(k[1]) + exp(k[2]))
+```
+
+
+

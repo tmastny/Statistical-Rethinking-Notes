@@ -2,6 +2,9 @@
 
 This is my collection of notes on [*Statistical Rethinking: A Bayesian Course with Examples in R and Stan*](http://xcelab.net/rm/statistical-rethinking/). These are offered without assurances, besides the guarantee of mistakes and typos.
 
+### How to use
+
+There is a folder for each chapter and in each folder there are files for notes and exercises. There are two types of files, `.Rmd` and `.md`. To see the results in formatted html open the `.md` files on github. Some code or warnings may be suppressed. For the complete code, see the `.Rmd` files.
 
 ### Other sets of notes
 
@@ -13,7 +16,7 @@ https://github.com/rlabbe/statistical-rethinking
 
 http://scs.math.yorku.ca/index.php/SCS_Reads_2016-2017
 
-### How my notes are different
+### Why my notes are different
 
 The book follows a traditional `r-base` style along with some added utility and Stan functions from the `rethinking` package. The other notes mostly conform to this style. This is an effective way to introduce R and Stan since it is a low barrier to entry. 
 

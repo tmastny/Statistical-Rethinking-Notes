@@ -1,0 +1,275 @@
+---
+title: "Chapter 11 Practice"
+author: "Tim"
+date: "10/16/2017"
+output: 
+  html_document:
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, 
+                      results='show', cache=TRUE, autodep=TRUE)
+```
+
+## Ordered Categorical Outcomes
+
+We are going to study an experiment on the trolley problem.
+
+```{r}
+library(rethinking)
+data("Trolley")
+d <- Trolley
+head(d)
+```
+
+We are interest in modeling the response, that is the moral permissiveness of various moral situations rated on a scale from 1 to 7.
+
+```{r, fig.align='center', fig.width=4, fig.height=4}
+simplehist(d$response)
+```
+
+To maintain an ordered categorical outcome, we need to describe the response in terms of log-cumulative-odds:
+
+```{r, fig.align='center', fig.width=4, fig.height=4}
+# discete proportion of each response value
+pr_k <- table(d$response)/nrow(d)
+
+# cumsum converts to cumulative proportions
+cum_pr_k <- cumsum(pr_k)
+
+plot(1:7, cum_pr_k, type='b', xlab='response',
+     ylab='Cumulative proportion', ylim=c(0,1))
+```
+
+```{r}
+logit <- function(x) log(x/(1-x))
+(lco <- logit(cum_pr_k))
+```
+
+```{r}
+m11.1 <- map(
+  alist(
+    response ~ dordlogit(phi, c(a1,a2,a3,a4,a5,a6)),
+    phi <- 0,
+    c(a1,a2,a3,a4,a5,a6) ~ dnorm(0,10)
+  ),
+  data=d,
+  start=list(a1=-2,a2=-1,a3=0,a4=1,a5=2,a6=2.5)
+)
+```
+```{r}
+precis(m11.1)
+```
+
+To get cumulative probabilities (and thus actual probabilities) we 
+```{r}
+logistic(coef(m11.1))
+```
+
+Now we can add predictors, based on the moral scenario of the probelm:
+
+```{r}
+m11.2 <- map(
+  alist(
+    response ~ dordlogit(phi, c(a1,a2,a3,a4,a5,a6)),
+    phi <- bA * action + bI * intention + bC * contact,
+    c(bA,bI,bC) ~ dnorm(0,10),
+    c(a1,a2,a3,a4,a5,a6) ~ dnorm(0,10)
+  ),
+  data=d,
+  start=list(a1=-2,a2=-1,a3=0,a4=1,a5=2,a6=2.5)
+)
+```
+```{r}
+m11.3 <- map(
+  alist(
+    response ~ dordlogit(phi, c(a1,a2,a3,a4,a5,a6)),
+    phi <- bA * action + bI * intention + bC * contact +
+      bAI * action * intention + bCI * contact * intention,
+    c(bA,bI,bC,bAI,bCI) ~ dnorm(0,10),
+    c(a1,a2,a3,a4,a5,a6) ~ dnorm(0,10)
+  ),
+  data=d,
+  start=list(a1=-2,a2=-1,a3=0,a4=1,a5=2,a6=2.5)
+)
+```
+```{r}
+coeftab(m11.1, m11.2, m11.3)
+```
+```{r}
+compare(m11.1, m11.2, m11.3)
+```
+
+The interaction model holds all the predictive weight. 
+
+Graphing the predictors is the best way to make sense of the model:
+
+```{r, fig.align='center', fig.width=4, fig.height=4}
+post <- extract.samples(m11.3)
+
+plot(1,1,type='n', xlab='intention', ylab='probability',
+     xlim=c(0,1), ylim=c(0,1), xaxp=c(0,1,1), yaxp=c(0,1,2))
+
+kA <- 0
+kC <- 1
+kI <- 0:1
+for (s in 1:100) {
+  p <- post[s,]
+  ak <- as.numeric(p[1:6])
+  phi <- p$bA*kA + p$bI*kI + p$bC*kC +
+    p$bAI*kA*kI + p$bCI*kC*kI
+  pk <- pordlogit(1:6, a=ak, phi=phi)
+  for (i in 1:6)
+    lines(kI, pk[,i], col=col.alpha(rangi2, 0.1))
+}
+mtext(concat("action=", kA, ",contact=",kC))
+```
+
+So looking at the intention and contact story, the probability that someone would rate the story a 4 or lower is 60%, since the y-axis is cumulative probability. 
+
+## Zero-inflated outcomes
+
+This occurs when we are modeling count, but zero can arise in multiple ways. For example, suppose there is a random chance a monk will produce a manuscript or they will drink. If they are drinking, they will produce zero, but if they are working they could produce zero as well, just based on a low rate. 
+
+How do we model a scenario like this?
+
+We'll test this with some simulated data:
+
+```{r, fig.align='center', fig.width=4, fig.height=4}
+prob_drink <- 0.2 
+rate_work <- 1 # on average, one manuscript a day
+
+N <- 365 # one year of working
+
+drink <- rbinom(N, 1, prob_drink)
+
+# manuscripts completed
+y <- (1-drink)*rpois(N, rate_work)
+
+simplehist(y, xlab='manuscripts completed', lwd=4)
+zeros_drink <-sum(drink)
+zeros_work <- sum(y==0 & drink==0)
+zeros_total <- sum(y==0)
+lines(c(0,0), c(zeros_work, zeros_total), lwd=4, col=rangi2)
+```
+
+This graph demonstrates the nature of 'zero-inflated.' Two separate processes contribute to the 0 outcome. 
+
+Let's model it:
+
+```{r}
+m11.4 <- map(
+  alist(
+    y ~ dzipois(p, lambda),
+    logit(p) <- ap,
+    log(lambda) <- al,
+    ap ~ dnorm(0,1),
+    al ~ dnorm(0,10)
+  ),
+  data=list(y=y)
+)
+precis(m11.4)
+```
+
+```{r}
+logistic(-1.11)
+```
+```{r}
+exp(0.08)
+```
+
+So our model uncovers `0.24` as the proportion of days drinking, close to the actual model. Likewise, the rate at which we produce manuscripts is about 1. 
+
+## Over-dispersed Outcomes
+
+Over dispersed models happen when the variance of a variable is greater than the model predictors. For example, the variance for a binomial model is $np(1-p)$. When the sampled variance exceeds this amount, after modeling with the predictors, this implies there is some omitted variable producing disperion in the model. Without knowing what this missing predictor is, we can account for some additional variation by using a continuous mixture.
+
+The first data we will attempt to fit with this model is the UCB admittance data. Here, if we just try to fit a standard binomial model, we see a huge variance. This happens because the actual probability of admit/reject varies within each department.
+
+A *beta-binomial* model is useful because it assumes each binomial count observation has its own probability of success. The outcome of the model is a distribution of the probbilities of sccess across cases, rather than a single probability of success in the binomial model.
+
+For example,
+
+```{r, fig.align='center', fig.width=4, fig.height=4}
+pbar <- 0.5
+theta <- 5
+curve(dbeta2(x, pbar, theta), from=0, to=1, 
+      xlab='probability', ylab='density')
+```
+
+So here we are looking at the densities of potential probabilites, with probability `0.5` being the average probability. 
+
+Let's model the data with Stan. We want to model the average probability of each row by the linear logistic. In this model, we don't have any predictors, but we are still modeling a probability distrubition for each row (and thus department) just by the nature of the model.
+
+```{r}
+data("UCBadmit")
+d <- UCBadmit
+```
+```{r, results='hide'}
+m11.5 <- map2stan(
+  alist(
+    admit ~ dbetabinom(applications, pbar, theta),
+    logit(pbar) <- a,
+    a ~ dnorm(0,2),
+    theta ~ dexp(1)
+  ),
+  data=d,
+  constraints = list(theta='lower=0'),
+  start=list(theta=3),
+  iter=4000, warmup=1000, chains=2, cores=2
+)
+```
+```{r}
+precis(m11.5)
+```
+
+Implied avarege probability of admission, across departments:
+
+```{r}
+post <- extract.samples(m11.5)
+quantile(logistic(post$a), c(0.025, 0.5, 0.975))
+```
+
+```{r, fig.align='center', fig.width=4, fig.height=4}
+curve(dbeta2(x, mean(logistic(post$a)), mean(post$theta)), from=0, to=1,
+             ylab='density', xlab='probability admit', ylim=c(0,3), lwd=2)
+
+for (i in 1:100) {
+  p <- logistic(post$a[i])
+  theta <- post$theta[i]
+  curve(dbeta2(x, p, theta), add=TRUE, col=col.alpha('black',0.2))
+}
+```
+```{r, fig.align='center', fig.width=4, fig.height=4}
+postcheck(m11.5)
+```
+
+```{r, results='hide'}
+d$dept_id <- coerce_index(d$dept)
+
+m11.5.dept <- map2stan(
+  alist(
+    admit ~ dbetabinom(applications, pbar, theta),
+    logit(pbar) <- a[dept_id],
+    a[dept_id] ~ dnorm(0,2),
+    theta ~ dexp(1)
+  ),
+  data=d,
+  constraints = list(theta='lower=0'),
+  start=list(theta=3),
+  iter=4000, warmup=1000, chains=2, cores=2
+)
+```
+```{r}
+precis(m11.5.dept, depth=2)
+```
+
+```{r, fig.align='center', fig.width=4, fig.height=4}
+postcheck(m11.5.dept)
+```
+
+
+
+
+

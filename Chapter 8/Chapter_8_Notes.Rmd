@@ -1,0 +1,147 @@
+---
+title: "Chapter 8 Notes"
+author: "Tim"
+date: "10/10/2017"
+output:
+  html_document:
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, 
+                      results='show', cache=TRUE, autodep=TRUE)
+```
+
+## 8.3 Models with Stan
+```{r}
+library(rethinking)
+data(rugged)
+d <- rugged
+d$log_gdp <- log(d$rgdppc_2000)
+dd <- d[complete.cases(d$rgdppc_2000),]
+```
+
+Stan requires 'trimmed' variable sets that only contain the necessary data:
+
+```{r}
+dd.trim <- dd[,c("log_gdp","rugged","cont_africa")]
+```
+And we can fit the model with Stan:
+```{r, results='hide'}
+m8.1stan <- map2stan(
+  alist(
+    log_gdp <- dnorm(mu, sigma),
+    mu <- a + bR*rugged + bA*cont_africa + bAR*rugged*cont_africa,
+    a ~ dnorm(0,100),
+    bR ~ dnorm(0,10),
+    bA ~ dnorm(0,10),
+    bAR ~ dnorm(0,10),
+    sigma ~ dcauchy(0,2)
+  ),
+  data=dd.trim
+)
+```
+```{r}
+precis(m8.1stan)
+```
+We can sample:
+```{r}
+post <- extract.samples(m8.1stan)
+str(post)
+```
+And
+```{r}
+pairs(m8.1stan)
+```
+We also have these utility functions:
+```{r}
+WAIC(m8.1stan)
+show(m8.1stan)
+```
+Trace plot:
+```{r}
+plot(m8.1stan)
+```
+### Debugging
+```{r, results='hide'}
+y <- c(-1,1)
+m8.2 <- map2stan(
+  alist(
+    y ~ dnorm(mu,sigma),
+    mu <- alpha
+  ),
+  data=list(y=y), start=list(alpha=0, sigma=1),
+  chains=2, iter=4000, warmup=1000)
+```
+```{r}
+precis(m8.2)
+```
+```{r}
+plot(m8.2)
+```
+
+
+We get a completely wrong solution. We just need to try some weakly informative priors:
+```{r, results='hide'}
+m8.3 <- map2stan(
+  alist(
+    y ~ dnorm(mu,sigma),
+    mu <- alpha,
+    alpha ~ dnorm(1, 10),
+    sigma ~ dcauchy(0,1)
+  ),
+  data=list(y=y), start=list(alpha=0, sigma=1),
+  chains=2, iter=4000, warmup=1000)
+```
+```{r}
+precis(m8.3)
+```
+```{r}
+plot(m8.3)
+```
+
+### Non-identifiable parameters
+We see what happens when we try to fit highly correlated predictors and non-identifiable parameters:
+
+```{r}
+y <- rnorm(100, mean=0, sd=1)
+```
+```{r, results='hide'}
+m8.4 <- map2stan(
+  alist(
+    y ~ dnorm(mu, sigma),
+    mu <- a1 + a2,
+    sigma ~ dcauchy(0,1)  
+  ),
+  data=list(y=y), start=list(a1=0, a2=0, sigma=1),
+  chains=2, iter=4000, warmup=1000)
+```
+```{r}
+precis(m8.4)
+```
+WE see terrible n_eff and Rhat values. 
+
+```{r}
+plot(m8.4)
+```
+
+The parameters are not stationary.
+
+Issues like this can be solved by adding weakly informative priors. This is good advice in general; it helps to fit models and make better decision. If for example, 30 million isn't a value model, don't use flat priors.
+```{r, results='hide'}
+m8.5 <- map2stan(
+  alist(
+    y ~ dnorm(mu, sigma),
+    mu <- a1 + a2,
+    a1 ~ dnorm(0,10),
+    a2 ~ dnorm(0,10),
+    sigma ~ dcauchy(0,1)  
+  ),
+  data=list(y=y), start=list(a1=0, a2=0, sigma=1),
+  chains=2, iter=4000, warmup=1000)
+```
+```{r}
+precis(m8.5)
+```
+
+
