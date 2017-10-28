@@ -4,7 +4,7 @@ This is my collection of notes on [*Statistical Rethinking: A Bayesian Course wi
 
 ### How to use
 
-There is a folder for each chapter and in each folder there are files for notes and exercises. There are two types of files, `.Rmd` and `.md`. To see the results in formatted html open the `.md` files on github. Some code or warnings may be suppressed. For the complete code, see the `.Rmd` files.
+There is a folder for each chapter and in each folder there are files for notes and exercises. There are two types of files, `.Rmd` and `.md`. To see the results in formatted html open the `.md` files on github. Some code or warnings may be suppressed. For the complete code, open the `.Rmd` files in RStudio.
 
 ### Other sets of notes
 
