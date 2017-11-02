@@ -39,9 +39,11 @@ d %>% as.tibble()
 ## # ... with 38 more rows
 ```
 
+To fit the multilevel model in `brms` as described in we need to explicitly remove the population parameter with `-1` as shown below:
+
 
 ```r
-mod.intercept <- brm(surv | trials(density) ~ 1 + (1 | tank),
+mod.intercept <- brm(surv | trials(density) ~ -1 + (1 | tank),
                      family = binomial(), data=d,
                      prior = c(set_prior("normal(0,1)", class = 'sd',
                                          group = 'tank', coef='Intercept'),
@@ -55,7 +57,7 @@ summary(mod.intercept)
 
 ```
 ##  Family: binomial(logit) 
-## Formula: surv | trials(density) ~ 1 + (1 | tank) 
+## Formula: surv | trials(density) ~ -1 + (1 | tank) 
 ##    Data: d (Number of observations: 48) 
 ## Samples: 4 chains, each with iter = 2000; warmup = 1000; thin = 1; 
 ##          total post-warmup samples = 4000
@@ -64,29 +66,24 @@ summary(mod.intercept)
 ## Group-Level Effects: 
 ## ~tank (Number of levels: 48) 
 ##               Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
-## sd(Intercept)     1.59      0.20     1.25     2.04       1057 1.01
-## 
-## Population-Level Effects: 
-##           Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
-## Intercept     1.40      0.26     0.91     1.93        847 1.00
+## sd(Intercept)     2.03      0.25     1.61     2.56       1045 1.00
 ## 
 ## Samples were drawn using sampling(NUTS). For each parameter, Eff.Sample 
 ## is a crude measure of effective sample size, and Rhat is the potential 
 ## scale reduction factor on split chains (at convergence, Rhat = 1).
 ```
 
+How do we interpret the summary of this hierarchal model? Well, in terms of the rethinking model on page 359, `sd(Intercept)` is the adaptive standard deviation from the Normal distrubtion that each tank intercept is draw from. In other words, each intercept is draw from a normal distribution with `sd(Intercept)` standard deviation with an adaptive mean. 
+
 Let's reconstruct the plot on page 361:
 
 
 ```r
-p <- ggplot(d, aes(x=tank)) + 
+p <- ggplot(d, aes(x=tank)) +
   geom_point(aes(y=propsurv)) +
-  geom_hline(yintercept = mean(d$propsurv), linetype=2) + 
+  geom_hline(yintercept = mean(d$propsurv), linetype=2) +
   geom_vline(xintercept = c(16.5, 32.5))
-p
 ```
-
-![](Chapter_12_Notes_files/figure-html/unnamed-chunk-4-1.png)<!-- -->
 
 Now let's take a look at the predicted survival rates:
 
@@ -98,23 +95,54 @@ d.mean <- d %>%
   mutate(propsurv_pred = estimate/density)
 ```
 
+`brms` doesn't give the adapative population prior $\alpha$ directly. We need to calculate it by sampling from the posterior parameters of the group-level intercepts. The function `tidybayes::spread_samples` is nice tool to easily sample parameters from the posterior into tidy data frames. `r_tank` is the name of the group-level intercepts. There is a standard convention to `brms` name, but you can always find the names with `parnames` as shown below. `tidybayes::spread_samples` is flexible enough to allow syntax matching for the parameter of interest. 
+
+
 ```r
+parnames(mod.intercept)
+```
+
+```
+##  [1] "sd_tank__Intercept"   "r_tank[1,Intercept]"  "r_tank[2,Intercept]" 
+##  [4] "r_tank[3,Intercept]"  "r_tank[4,Intercept]"  "r_tank[5,Intercept]" 
+##  [7] "r_tank[6,Intercept]"  "r_tank[7,Intercept]"  "r_tank[8,Intercept]" 
+## [10] "r_tank[9,Intercept]"  "r_tank[10,Intercept]" "r_tank[11,Intercept]"
+## [13] "r_tank[12,Intercept]" "r_tank[13,Intercept]" "r_tank[14,Intercept]"
+## [16] "r_tank[15,Intercept]" "r_tank[16,Intercept]" "r_tank[17,Intercept]"
+## [19] "r_tank[18,Intercept]" "r_tank[19,Intercept]" "r_tank[20,Intercept]"
+## [22] "r_tank[21,Intercept]" "r_tank[22,Intercept]" "r_tank[23,Intercept]"
+## [25] "r_tank[24,Intercept]" "r_tank[25,Intercept]" "r_tank[26,Intercept]"
+## [28] "r_tank[27,Intercept]" "r_tank[28,Intercept]" "r_tank[29,Intercept]"
+## [31] "r_tank[30,Intercept]" "r_tank[31,Intercept]" "r_tank[32,Intercept]"
+## [34] "r_tank[33,Intercept]" "r_tank[34,Intercept]" "r_tank[35,Intercept]"
+## [37] "r_tank[36,Intercept]" "r_tank[37,Intercept]" "r_tank[38,Intercept]"
+## [40] "r_tank[39,Intercept]" "r_tank[40,Intercept]" "r_tank[41,Intercept]"
+## [43] "r_tank[42,Intercept]" "r_tank[43,Intercept]" "r_tank[44,Intercept]"
+## [46] "r_tank[45,Intercept]" "r_tank[46,Intercept]" "r_tank[47,Intercept]"
+## [49] "r_tank[48,Intercept]" "lp__"
+```
+
+```r
+# group parameter samples using tidybayes
+pop.intercept <- mod.intercept %>% spread_samples(r_tank[tank,])
+pop.proportion <- logistic(mean(pop.intercept$r_tank))
+
 p +
-  geom_point(aes(y=propsurv_pred), data=d.mean, shape=1) + 
-  geom_hline(yintercept = logistic(1.38)) # predicted population mean (intercept)
+  geom_point(aes(y=propsurv_pred), data=d.mean, shape=1) +
+  geom_hline(yintercept = pop.proportion) # predicted population mean (intercept)
 ```
 
 ![](Chapter_12_Notes_files/figure-html/unnamed-chunk-6-1.png)<!-- -->
 
 Here we can see the classic shrinkage on each tank using a multilevel model. Moreover the tanks are sorted from smallest to larger: therefore as we move to the right we have less shrinkage. Lastly, also note that the new estimated population mean is different than the observed mean.
 
-Let's try to fit the model with a predictor. I would expect that predators would decrease the the probability of survival.
+As an aside, let's try to fit the model with a predictor. McElreath withholds varying slopes until the Chapter 13, so let's try a population predictor. I would expect that predators would decrease the the probability of survival.
 
 
 ```r
 # indicator variable for predator
 d$pred <- ifelse(d$pred == 'pred', 1, 0)
-mod.pred <- brm(surv | trials(density) ~ pred + (pred | tank), data=d,
+mod.pred <- brm(surv | trials(density) ~ pred + (1 | tank), data=d,
                 family = binomial(),
                 prior = c(set_prior("normal(0,1)", class = 'sd',
                                      group = 'tank', coef='Intercept'),
@@ -128,7 +156,7 @@ summary(mod.pred)
 
 ```
 ##  Family: binomial(logit) 
-## Formula: surv | trials(density) ~ pred + (pred | tank) 
+## Formula: surv | trials(density) ~ pred + (1 | tank) 
 ##    Data: d (Number of observations: 48) 
 ## Samples: 4 chains, each with iter = 2000; warmup = 1000; thin = 1; 
 ##          total post-warmup samples = 4000
@@ -136,27 +164,27 @@ summary(mod.pred)
 ##  
 ## Group-Level Effects: 
 ## ~tank (Number of levels: 48) 
-##                     Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
-## sd(Intercept)           0.31      0.23     0.01     0.86        531 1.00
-## sd(pred)                0.93      0.32     0.24     1.55        294 1.00
-## cor(Intercept,pred)     0.10      0.56    -0.92     0.95        175 1.01
+##               Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
+## sd(Intercept)     0.83      0.15     0.58     1.15       1825 1.00
 ## 
 ## Population-Level Effects: 
 ##           Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
-## Intercept     2.59      0.19     2.25     2.98       4000 1.00
-## pred         -2.53      0.31    -3.13    -1.93       2527 1.00
+## Intercept     2.71      0.25     2.25     3.23       3475 1.00
+## pred         -2.68      0.32    -3.30    -2.07       2894 1.00
 ## 
 ## Samples were drawn using sampling(NUTS). For each parameter, Eff.Sample 
 ## is a crude measure of effective sample size, and Rhat is the potential 
 ## scale reduction factor on split chains (at convergence, Rhat = 1).
 ```
 
-It allow makes sense that survival depends on the number of tadpoles relative to the size of a tank, whether a predator is present or not. If there are many tadpoles in a small tank, the survival rate should decrease when a predator is present.
+As expected, the presence of a predator has a strong effect on the survival of tadpoles.
+
+It would also makes sense that survival depends on the number of tadpoles relative to the size of a tank, whether a predator is present or not. If there are many tadpoles in a small tank, the survival rate should decrease when a predator is present.
 
 
 ```r
-mod.interaction <- brm(surv | trials(density) ~ pred*density*size 
-                       + (1 | tank), 
+mod.interaction <- brm(surv | trials(density) ~ pred*density*size
+                       + (1 | tank),
                        data=d, family = binomial(),
                        prior = c(set_prior("normal(0,1)", class = 'sd',
                                      group = 'tank', coef='Intercept'),
@@ -212,355 +240,36 @@ LOO(mod.intercept, mod.pred, mod.interaction)
 
 ```
 ##                                  LOOIC    SE
-## mod.intercept                   224.89  8.62
-## mod.pred                        205.03 10.91
+## mod.intercept                   232.31  6.48
+## mod.pred                        213.46 11.32
 ## mod.interaction                 214.79 11.27
-## mod.intercept - mod.pred         19.86  6.87
-## mod.intercept - mod.interaction  10.09  7.38
-## mod.pred - mod.interaction       -9.76  4.42
+## mod.intercept - mod.pred         18.85  8.58
+## mod.intercept - mod.interaction  17.52  7.99
+## mod.pred - mod.interaction       -1.33  5.40
 ```
 
-Based on `loo` estimates, the full interaction model seems to over fit, with confidence given the standard error. Let's try without interactions:
+Based on the LOO information criteria, the predator predictor model seems like the best fit. 
 
-
-```r
-mod.full.main <- brm(surv | trials(density) ~ pred + density + size 
-                       + (1 | tank), 
-                       data=d, family = binomial(),
-                       prior = c(set_prior("normal(0,1)", class = 'sd',
-                                     group = 'tank', coef='Intercept'),
-                                 set_prior("cauchy(0,1)", class = 'sd',
-                                     group = 'tank')))
-```
-
-```r
-summary(mod.full.main)
-```
-
-```
-##  Family: binomial(logit) 
-## Formula: surv | trials(density) ~ pred + density + size + (1 | tank) 
-##    Data: d (Number of observations: 48) 
-## Samples: 4 chains, each with iter = 2000; warmup = 1000; thin = 1; 
-##          total post-warmup samples = 4000
-##     ICs: LOO = NA; WAIC = NA; R2 = NA
-##  
-## Group-Level Effects: 
-## ~tank (Number of levels: 48) 
-##               Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
-## sd(Intercept)     0.76      0.15     0.50     1.09       1659 1.00
-## 
-## Population-Level Effects: 
-##           Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
-## Intercept     3.16      0.50     2.19     4.14       3666 1.00
-## pred         -2.73      0.31    -3.35    -2.11       3175 1.00
-## density      -0.03      0.02    -0.06     0.00       3458 1.00
-## sizesmall     0.52      0.30    -0.08     1.12       2573 1.00
-## 
-## Samples were drawn using sampling(NUTS). For each parameter, Eff.Sample 
-## is a crude measure of effective sample size, and Rhat is the potential 
-## scale reduction factor on split chains (at convergence, Rhat = 1).
-```
-
-```r
-LOO(mod.intercept, mod.pred, mod.interaction, mod.full.main)
-```
-
-```
-##                                  LOOIC    SE
-## mod.intercept                   224.89  8.62
-## mod.pred                        205.03 10.91
-## mod.interaction                 214.79 11.27
-## mod.full.main                   213.48 11.32
-## mod.intercept - mod.pred         19.86  6.87
-## mod.intercept - mod.interaction  10.09  7.38
-## mod.intercept - mod.full.main    11.41  7.89
-## mod.pred - mod.interaction       -9.76  4.42
-## mod.pred - mod.full.main         -8.45  4.26
-## mod.interaction - mod.full.main   1.31  4.03
-```
-
-Thus after considering the effect of predation, density seems to matter very little, while there seems to be some small effect of small sizes improving survival rate. Moreover, this result is consistent with the small effects when looking at the interaction model. 
-
-Thus including the hierarchical predictor of predator gives us the best model. But how exactly do we interpret that effect? Well consider this:
-
-
-```r
-mod.pred.pop <- brm(surv | trials(density) ~ pred + (1 | tank), 
-                       data=d, family = binomial(),
-                       prior = c(set_prior("normal(0,1)", class = 'sd',
-                                     group = 'tank', coef='Intercept'),
-                                 set_prior("cauchy(0,1)", class = 'sd',
-                                     group = 'tank')))
-```
-
-```r
-summary(mod.pred.pop)
-```
-
-```
-##  Family: binomial(logit) 
-## Formula: surv | trials(density) ~ pred + (1 | tank) 
-##    Data: d (Number of observations: 48) 
-## Samples: 4 chains, each with iter = 2000; warmup = 1000; thin = 1; 
-##          total post-warmup samples = 4000
-##     ICs: LOO = NA; WAIC = NA; R2 = NA
-##  
-## Group-Level Effects: 
-## ~tank (Number of levels: 48) 
-##               Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
-## sd(Intercept)     0.83      0.15     0.58     1.15       1825 1.00
-## 
-## Population-Level Effects: 
-##           Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
-## Intercept     2.71      0.25     2.25     3.23       3475 1.00
-## pred         -2.68      0.32    -3.30    -2.07       2894 1.00
-## 
-## Samples were drawn using sampling(NUTS). For each parameter, Eff.Sample 
-## is a crude measure of effective sample size, and Rhat is the potential 
-## scale reduction factor on split chains (at convergence, Rhat = 1).
-```
-
-```r
-LOO(mod.pred, mod.pred.pop)
-```
-
-```
-##                          LOOIC    SE
-## mod.pred                205.03 10.91
-## mod.pred.pop            213.46 11.32
-## mod.pred - mod.pred.pop  -8.43  3.59
-```
-
-So we need the predator predictor on the tank level. I still need to research how to interpret it; but I think we are pull the variance of the effect of predator on each tank. 
-
-Specifically, I believe `sd(pred)` is the distribution of the parameter predator for each tank. 
-
-One way to understand is to remember the mathematical formula of a multilevel model. With `mod.pred`, we are technically fitting the following model: 
-\begin{align*}
-p_{\text{survivial}} &\sim \text{Normal}(\mu, \sigma) \\
-\mu &= \alpha_\text{tank} + \beta_{\text{pred}} \cdot \text{pred} + \beta_\text{pred | tank} \cdot \text{pred} \\
-\alpha_\text{tank} &\sim \text{Normal}(\mu_\text{intercept}, \text{sd}(\alpha)) \\
-\beta_\text{pred | tank} &\sim \text{Normal}(\mu_\text{pred}, \text{sd}(\beta)) \\
-\cdots
-\end{align*}
-
-So our multilevel model is calculating the standard deviation on a group specific parameters. Ah! Is the mean the population effect? Yes, indeed. That is verified on page 359. 
+We can also do some posterior predictor checks on the response density, as advocated by Gelman et al in Chapter 6 of Bayesian Data Analysis. `pp_check` is a method in `brms` that calls the package `bayesplot`, a tie in Stan for visualizing the posterior:
 
 
 ```r
 pp_check(mod.pred)
 ```
 
-![](Chapter_12_Notes_files/figure-html/unnamed-chunk-18-1.png)<!-- -->
-
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-12-1.png)<!-- -->
 
 ```r
 pp_check(mod.intercept)
 ```
 
-![](Chapter_12_Notes_files/figure-html/unnamed-chunk-19-1.png)<!-- -->
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-12-2.png)<!-- -->
 
-As warned in the `brms` document, the fit looks okay for both (with mod.pred better). The real results come from comparing the `loo`s. 
-
-What happens if we include predator as a group level predictor without having it as a population predictor? My thoughts is that the model will force it as a population effect.
-
-
-```r
-mod.pred.test <- brm(surv | trials(density) ~ 1 + (pred | tank), 
-                       data=d, family = binomial(),
-                       prior = c(set_prior("normal(0,1)", class = 'sd',
-                                     group = 'tank', coef='Intercept'),
-                                 set_prior("cauchy(0,1)", class = 'sd',
-                                     group = 'tank')))
-```
-
-```r
-summary(mod.pred.test)
-```
-
-```
-##  Family: binomial(logit) 
-## Formula: surv | trials(density) ~ 1 + (pred | tank) 
-##    Data: d (Number of observations: 48) 
-## Samples: 4 chains, each with iter = 2000; warmup = 1000; thin = 1; 
-##          total post-warmup samples = 4000
-##     ICs: LOO = NA; WAIC = NA; R2 = NA
-##  
-## Group-Level Effects: 
-## ~tank (Number of levels: 48) 
-##                     Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
-## sd(Intercept)           0.28      0.22     0.01     0.83       1150 1.00
-## sd(pred)                2.44      0.48     1.56     3.45        857 1.00
-## cor(Intercept,pred)     0.09      0.56    -0.92     0.96        143 1.01
-## 
-## Population-Level Effects: 
-##           Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
-## Intercept     2.32      0.19     1.94     2.68       2515 1.00
-## 
-## Samples were drawn using sampling(NUTS). For each parameter, Eff.Sample 
-## is a crude measure of effective sample size, and Rhat is the potential 
-## scale reduction factor on split chains (at convergence, Rhat = 1).
-```
-
-```r
-LOO(mod.pred.test, mod.pred)
-```
-
-```
-##                           LOOIC    SE
-## mod.pred.test            209.96 10.85
-## mod.pred                 205.03 10.91
-## mod.pred.test - mod.pred   4.93  5.14
-```
-
-Good to know: it doesn't add it in, but it doesn't seem to be wise advice in general.
-
-Just for fun: 
-
-I'm also curious about a more complete interaction model by the tank level. 
-
-
-```r
-mod.full <- brm(surv | trials(density) ~ pred*density*size + 
-                  (pred*density*size | tank), 
-                       data=d, family = binomial(),
-                       prior = c(set_prior("normal(0,1)", class = 'sd',
-                                     group = 'tank', coef='Intercept'),
-                                 set_prior("cauchy(0,1)", class = 'sd',
-                                     group = 'tank')))
-```
-
-```r
-summary(mod.full)
-```
-
-```
-##  Family: binomial(logit) 
-## Formula: surv | trials(density) ~ pred * density * size + (pred * density * size | tank) 
-##    Data: d (Number of observations: 48) 
-## Samples: 4 chains, each with iter = 2000; warmup = 1000; thin = 1; 
-##          total post-warmup samples = 4000
-##     ICs: LOO = NA; WAIC = NA; R2 = NA
-##  
-## Group-Level Effects: 
-## ~tank (Number of levels: 48) 
-##                                               Estimate Est.Error l-95% CI
-## sd(Intercept)                                     0.33      0.23     0.01
-## sd(pred)                                          0.44      0.31     0.02
-## sd(density)                                       0.01      0.01     0.00
-## sd(sizesmall)                                     0.35      0.28     0.01
-## sd(pred:density)                                  0.02      0.01     0.00
-## sd(pred:sizesmall)                                0.55      0.44     0.02
-## sd(density:sizesmall)                             0.02      0.01     0.00
-## sd(pred:density:sizesmall)                        0.03      0.02     0.00
-## cor(Intercept,pred)                              -0.03      0.33    -0.65
-## cor(Intercept,density)                           -0.08      0.34    -0.69
-## cor(pred,density)                                -0.03      0.34    -0.65
-## cor(Intercept,sizesmall)                         -0.04      0.33    -0.66
-## cor(pred,sizesmall)                              -0.01      0.33    -0.63
-## cor(density,sizesmall)                           -0.04      0.33    -0.65
-## cor(Intercept,pred:density)                      -0.03      0.33    -0.65
-## cor(pred,pred:density)                           -0.07      0.34    -0.71
-## cor(density,pred:density)                        -0.04      0.33    -0.64
-## cor(sizesmall,pred:density)                      -0.01      0.33    -0.64
-## cor(Intercept,pred:sizesmall)                    -0.02      0.33    -0.62
-## cor(pred,pred:sizesmall)                         -0.02      0.34    -0.64
-## cor(density,pred:sizesmall)                      -0.01      0.33    -0.64
-## cor(sizesmall,pred:sizesmall)                    -0.02      0.34    -0.65
-## cor(pred:density,pred:sizesmall)                 -0.02      0.34    -0.64
-## cor(Intercept,density:sizesmall)                 -0.05      0.33    -0.67
-## cor(pred,density:sizesmall)                      -0.01      0.34    -0.64
-## cor(density,density:sizesmall)                   -0.03      0.34    -0.65
-## cor(sizesmall,density:sizesmall)                 -0.06      0.35    -0.68
-## cor(pred:density,density:sizesmall)              -0.02      0.33    -0.64
-## cor(pred:sizesmall,density:sizesmall)            -0.02      0.34    -0.66
-## cor(Intercept,pred:density:sizesmall)            -0.02      0.33    -0.64
-## cor(pred,pred:density:sizesmall)                 -0.03      0.34    -0.67
-## cor(density,pred:density:sizesmall)              -0.02      0.33    -0.64
-## cor(sizesmall,pred:density:sizesmall)            -0.02      0.34    -0.65
-## cor(pred:density,pred:density:sizesmall)         -0.04      0.33    -0.67
-## cor(pred:sizesmall,pred:density:sizesmall)       -0.04      0.34    -0.68
-## cor(density:sizesmall,pred:density:sizesmall)    -0.03      0.33    -0.66
-##                                               u-95% CI Eff.Sample Rhat
-## sd(Intercept)                                     0.85       1891 1.00
-## sd(pred)                                          1.16       1939 1.00
-## sd(density)                                       0.03       2233 1.00
-## sd(sizesmall)                                     1.07       3394 1.00
-## sd(pred:density)                                  0.05       1849 1.00
-## sd(pred:sizesmall)                                1.63       2963 1.00
-## sd(density:sizesmall)                             0.05       2176 1.00
-## sd(pred:density:sizesmall)                        0.09       2114 1.00
-## cor(Intercept,pred)                               0.62       4000 1.00
-## cor(Intercept,density)                            0.57       4000 1.00
-## cor(pred,density)                                 0.62       4000 1.00
-## cor(Intercept,sizesmall)                          0.58       4000 1.00
-## cor(pred,sizesmall)                               0.63       4000 1.00
-## cor(density,sizesmall)                            0.62       4000 1.00
-## cor(Intercept,pred:density)                       0.59       4000 1.00
-## cor(pred,pred:density)                            0.60       4000 1.00
-## cor(density,pred:density)                         0.59       4000 1.00
-## cor(sizesmall,pred:density)                       0.63       4000 1.00
-## cor(Intercept,pred:sizesmall)                     0.62       4000 1.00
-## cor(pred,pred:sizesmall)                          0.62       4000 1.00
-## cor(density,pred:sizesmall)                       0.61       4000 1.00
-## cor(sizesmall,pred:sizesmall)                     0.62       4000 1.00
-## cor(pred:density,pred:sizesmall)                  0.62       4000 1.00
-## cor(Intercept,density:sizesmall)                  0.59       4000 1.00
-## cor(pred,density:sizesmall)                       0.63       4000 1.00
-## cor(density,density:sizesmall)                    0.61       4000 1.00
-## cor(sizesmall,density:sizesmall)                  0.62       4000 1.00
-## cor(pred:density,density:sizesmall)               0.63       4000 1.00
-## cor(pred:sizesmall,density:sizesmall)             0.64       3179 1.00
-## cor(Intercept,pred:density:sizesmall)             0.60       4000 1.00
-## cor(pred,pred:density:sizesmall)                  0.62       4000 1.00
-## cor(density,pred:density:sizesmall)               0.63       4000 1.00
-## cor(sizesmall,pred:density:sizesmall)             0.63       4000 1.00
-## cor(pred:density,pred:density:sizesmall)          0.60       4000 1.00
-## cor(pred:sizesmall,pred:density:sizesmall)        0.61       3214 1.00
-## cor(density:sizesmall,pred:density:sizesmall)     0.62       3191 1.00
-## 
-## Population-Level Effects: 
-##                        Estimate Est.Error l-95% CI u-95% CI Eff.Sample
-## Intercept                  2.27      0.85     0.71     4.06       2398
-## pred                      -1.08      1.10    -3.33     1.03       2096
-## density                    0.02      0.03    -0.04     0.08       2360
-## sizesmall                  0.19      1.26    -2.27     2.62       2126
-## pred:density              -0.08      0.04    -0.17    -0.00       2090
-## pred:sizesmall             0.13      1.72    -3.23     3.58       1895
-## density:sizesmall         -0.01      0.05    -0.10     0.08       2086
-## pred:density:sizesmall     0.04      0.07    -0.10     0.17       1961
-##                        Rhat
-## Intercept              1.00
-## pred                   1.00
-## density                1.00
-## sizesmall              1.00
-## pred:density           1.00
-## pred:sizesmall         1.00
-## density:sizesmall      1.00
-## pred:density:sizesmall 1.00
-## 
-## Samples were drawn using sampling(NUTS). For each parameter, Eff.Sample 
-## is a crude measure of effective sample size, and Rhat is the potential 
-## scale reduction factor on split chains (at convergence, Rhat = 1).
-```
-
-```r
-LOO(mod.full, mod.pred)
-```
-
-```
-##                      LOOIC    SE
-## mod.full            212.69 10.43
-## mod.pred            205.03 10.91
-## mod.full - mod.pred   7.66  4.46
-```
-
-For future reference, the model fit fairly quick. I shouldn't have any trepidation trying it out. Here it seems irrelevant.
+A standard warning with these checks, as noted in the `pp_check` `brms` documentation, a graphical fit may look good for both models. Indeed, here both seem to fit okay, with `mod.pred` being a bit better as expected. Information criteria like LOO help us select the model in light of clear graphical errors.
 
 ## Multilevel chimps
 
-Next we return to the chimp data and consider multiple cluster types. 
+Next we return to the chimp data and consider multiple cluster types.
 
 
 ```r
@@ -587,11 +296,13 @@ d %>% as.tibble()
 ## # ... with 494 more rows
 ```
 
+#### One Cluster
+
 First, we'll fit one cluster:
 
 
 ```r
-mod.cluster <- brm( pulled_left ~ 1 + (1 | actor) +
+mod <- brm( pulled_left ~ 1 + (1 | actor) +
                       prosoc_left*condition - condition,
                     data = d, family = bernoulli(),
                     prior = c(set_prior("normal(0,10)", class = 'Intercept'),
@@ -601,7 +312,7 @@ mod.cluster <- brm( pulled_left ~ 1 + (1 | actor) +
 ```
 
 ```r
-summary(mod.cluster)
+summary(mod)
 ```
 
 ```
@@ -628,11 +339,11 @@ summary(mod.cluster)
 ## scale reduction factor on split chains (at convergence, Rhat = 1).
 ```
 
-Here is a convinent way to get estimates from the intercepts by actor for the model. 
+And to get the get the total intercepts for each actor as per R Code 12.22, we use `brms:coef`, which is the sum of the population and group level effects per level.
 
 
 ```r
-coef(mod.cluster)$actor[,,'Intercept']
+coef(mod)$actor[,,'Intercept']
 ```
 
 ```
@@ -646,74 +357,130 @@ coef(mod.cluster)$actor[,,'Intercept']
 ## 7  1.7638911 0.3983002  1.0368972  2.6044048
 ```
 
-Moreover, we can sample parameters from `brms` as is done in rethinking:
+Alternatively, we can use `tidybayes`. One reason to prefer `tidybayes` is that it has consistent `tidyverse` style syntax and always outputs tidy tibbles, grouped by `spread_sample` parameters for quick summaries.
 
 
 ```r
-str(posterior_samples(mod.cluster))
-```
-
-```
-## 'data.frame':	4000 obs. of  12 variables:
-##  $ b_Intercept            : num  -0.0431 -0.2105 -0.5129 -0.1248 0.3987 ...
-##  $ b_prosoc_left          : num  1.04 1.289 0.635 1.074 1.073 ...
-##  $ b_prosoc_left:condition: num  -0.8726 -0.2224 -0.3306 -0.0496 -0.0196 ...
-##  $ sd_actor__Intercept    : num  1.58 1.46 1.18 3 2.94 ...
-##  $ r_actor[1,Intercept]   : num  -0.8646 -0.7933 0.0745 -0.8962 -0.9319 ...
-##  $ r_actor[2,Intercept]   : num  3.49 5.47 3.98 4.04 2.84 ...
-##  $ r_actor[3,Intercept]   : num  -0.999 -1.139 -0.177 -1.069 -1.384 ...
-##  $ r_actor[4,Intercept]   : num  -0.996 -1.069 -0.185 -1.379 -1.21 ...
-##  $ r_actor[5,Intercept]   : num  -0.666 -0.712 0.168 -0.639 -1.311 ...
-##  $ r_actor[6,Intercept]   : num  0.5448 0.5651 0.6885 -0.0685 0.098 ...
-##  $ r_actor[7,Intercept]   : num  2.45 1.99 2.36 1.47 1.84 ...
-##  $ lp__                   : num  -285 -286 -286 -279 -283 ...
-```
-
-We should be able to do something similar with `tidybayes`:
-
-
-```r
-actor_intercepts <- mod.cluster %>% spread_samples(r_actor[actor,])
-actor_intercepts
-```
-
-```
-## # A tibble: 28,000 x 4
-## # Groups:   actor [7]
-##    .chain .iteration actor    r_actor
-##  *  <int>      <int> <int>      <dbl>
-##  1      1          1     1 -0.8645605
-##  2      1          1     2  3.4866306
-##  3      1          1     3 -0.9990898
-##  4      1          1     4 -0.9958190
-##  5      1          1     5 -0.6663967
-##  6      1          1     6  0.5447514
-##  7      1          1     7  2.4508580
-##  8      1          2     1 -0.7932521
-##  9      1          2     2  5.4729661
-## 10      1          2     3 -1.1388244
-## # ... with 27,990 more rows
-```
-
-```r
-actor_intercepts %>% mean_qi()
+mod %>% 
+  spread_samples(r_actor[actor,], b_Intercept) %>%
+  mean_qi(r_actor + b_Intercept) # no group_by necessary, already included
 ```
 
 ```
 ## # A tibble: 7 x 5
 ## # Groups:   actor [7]
-##   actor   r_actor   conf.low conf.high .prob
-##   <int>     <dbl>      <dbl>     <dbl> <dbl>
-## 1     1 -1.145886 -3.1283477 0.8790804  0.95
-## 2     2  4.198282  1.6804917 8.5529938  0.95
-## 3     3 -1.456172 -3.4376631 0.6182389  0.95
-## 4     4 -1.449156 -3.4842968 0.5483304  0.95
-## 5     5 -1.144121 -3.1296284 0.8784287  0.95
-## 6     6 -0.203393 -2.2377362 1.7936313  0.95
-## 7     7  1.333198 -0.6429028 3.4045263  0.95
+##   actor `r_actor + b_Intercept`   conf.low  conf.high .prob
+##   <int>                   <dbl>      <dbl>      <dbl> <dbl>
+## 1     1              -0.7151930 -1.2610062 -0.2096185  0.95
+## 2     2               4.6289749  2.5556927  8.7364989  0.95
+## 3     3              -1.0254793 -1.5779986 -0.4861515  0.95
+## 4     4              -1.0184635 -1.5746687 -0.4992832  0.95
+## 5     5              -0.7134285 -1.2502631 -0.2140437  0.95
+## 6     6               0.2272997 -0.2982452  0.7733302  0.95
+## 7     7               1.7638911  1.0368972  2.6044048  0.95
 ```
 
-We would expect the same results as above, but we got slightly different estimates, for both the mean and confidence intervals. 
+#### Two Clusters
+
+The study was organized into different blocks, where each monkey pulled their levels once per day as opposed to one monkey doing all their pulls at once. This technique called cross-classification is a useful design feature to eliminate temporal effects on the treatment.
+
+Thus we can also provide unique intercepts for each blocks. Ideally, we want to see that there is little to no variation within each blot: that's the entire design goal of the blocks. If there is added variation in different blocks, we can measure that variation and see if the treatment appears after controlling for the block variation.
+
+
+```r
+mod.cluster <- brm(pulled_left ~ 1 + (1 | actor) + (1 | block) + 
+                     prosoc_left + prosoc_left:condition,
+                   data=d, family=bernoulli(),
+                   prior = c(set_prior("normal(0,10)", class = 'Intercept'),
+                             set_prior("normal(0,10)", class = 'b'),
+                             set_prior("cauchy(0,1)", class = 'sd',
+                                       group = 'actor')))
+```
+
+```r
+summary(mod.cluster)
+```
+
+```
+##  Family: bernoulli(logit) 
+## Formula: pulled_left ~ 1 + (1 | actor) + (1 | block) + prosoc_left + prosoc_left:condition 
+##    Data: d (Number of observations: 504) 
+## Samples: 4 chains, each with iter = 2000; warmup = 1000; thin = 1; 
+##          total post-warmup samples = 4000
+##     ICs: LOO = NA; WAIC = NA; R2 = NA
+##  
+## Group-Level Effects: 
+## ~actor (Number of levels: 7) 
+##               Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
+## sd(Intercept)     2.26      0.90     1.12     4.71        769 1.01
+## 
+## ~block (Number of levels: 6) 
+##               Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
+## sd(Intercept)     0.24      0.23     0.01     0.78       1482 1.00
+## 
+## Population-Level Effects: 
+##                       Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
+## Intercept                 0.45      1.00    -1.40     2.46        544 1.00
+## prosoc_left               0.83      0.27     0.31     1.36       2452 1.00
+## prosoc_left:condition    -0.14      0.30    -0.75     0.44       3015 1.00
+## 
+## Samples were drawn using sampling(NUTS). For each parameter, Eff.Sample 
+## is a crude measure of effective sample size, and Rhat is the potential 
+## scale reduction factor on split chains (at convergence, Rhat = 1).
+```
+These results match the output of R Code 12.24. 
+
+For the charter in Figure 12.4:
+
+
+```r
+# it would be nice if spread_samples() with no args just spread every
+# parameter available. 
+parnames(mod.cluster)
+```
+
+```
+##  [1] "b_Intercept"             "b_prosoc_left"          
+##  [3] "b_prosoc_left:condition" "sd_actor__Intercept"    
+##  [5] "sd_block__Intercept"     "r_actor[1,Intercept]"   
+##  [7] "r_actor[2,Intercept]"    "r_actor[3,Intercept]"   
+##  [9] "r_actor[4,Intercept]"    "r_actor[5,Intercept]"   
+## [11] "r_actor[6,Intercept]"    "r_actor[7,Intercept]"   
+## [13] "r_block[1,Intercept]"    "r_block[2,Intercept]"   
+## [15] "r_block[3,Intercept]"    "r_block[4,Intercept]"   
+## [17] "r_block[5,Intercept]"    "r_block[6,Intercept]"   
+## [19] "lp__"
+```
+
+```r
+mod.cluster %>%
+  gather_samples(r_actor[actor,], r_block[block,],
+                 b_Intercept, b_prosoc_left, `b_prosoc_left:condition`,
+                 sd_block__Intercept, sd_actor__Intercept) %>%
+  mean_qi() %>%
+  replace_na(list(actor = "", block = "")) %>%
+  unite(variable, term, actor, block) %>%
+  ggplot(aes(y = variable, x = estimate)) +
+  geom_point() +
+  geom_segment(aes(x=conf.low, xend=conf.high, yend=variable))
+```
+
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-20-1.png)<!-- -->
+
+And the LOO comparison:
+
+
+```r
+LOO(mod, mod.cluster)
+```
+
+```
+##                    LOOIC    SE
+## mod               531.64 19.52
+## mod.cluster       533.13 19.73
+## mod - mod.cluster  -1.49  1.81
+```
+
 
 
 
