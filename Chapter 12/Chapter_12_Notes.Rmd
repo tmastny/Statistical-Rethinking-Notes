@@ -43,7 +43,7 @@ mod.intercept <- brm(surv | trials(density) ~ -1 + (1 | tank),
 summary(mod.intercept)
 ```
 
-How do we interpret the summary of this hierarchal model? Well, in terms of the rethinking model on page 359, `sd(Intercept)` is the adaptive standard deviation from the Normal distrubtion that each tank intercept is draw from. In other words, each intercept is draw from a normal distribution with `sd(Intercept)` standard deviation with an adaptive mean. 
+How do we interpret the summary of this hierarchical model? Well, in terms of the rethinking model on page 359, `sd(Intercept)` is the adaptive standard deviation from the Normal distribution that each tank intercept is draw from. In other words, each intercept is draw from a normal distribution with `sd(Intercept)` standard deviation with an adaptive mean. 
 
 Let's reconstruct the plot on page 361:
 
@@ -63,7 +63,7 @@ d.mean <- d %>%
   mutate(propsurv_pred = estimate/density)
 ```
 
-`brms` doesn't give the adapative population prior $\alpha$ directly. We need to calculate it by sampling from the posterior parameters of the group-level intercepts. The function `tidybayes::spread_samples` is nice tool to easily sample parameters from the posterior into tidy data frames. `r_tank` is the name of the group-level intercepts. There is a standard convention to `brms` name, but you can always find the names with `parnames` as shown below. `tidybayes::spread_samples` is flexible enough to allow syntax matching for the parameter of interest. 
+`brms` doesn't give the adaptive population prior $\alpha$ directly. We need to calculate it by sampling from the posterior parameters of the group-level intercepts. The function `tidybayes::spread_samples` is nice tool to easily sample parameters from the posterior into tidy data frames. `r_tank` is the name of the group-level intercepts. There is a standard convention to `brms` name, but you can always find the names with `parnames` as shown below. `tidybayes::spread_samples` is flexible enough to allow syntax matching for the parameter of interest. 
 
 ```{r}
 parnames(mod.intercept)
@@ -144,7 +144,7 @@ First, we'll fit one cluster:
 ```{r, results='hide'}
 mod <- brm( pulled_left ~ 1 + (1 | actor) +
                       prosoc_left*condition - condition,
-                    data = d, family = bernoulli(),
+                    data = d, family = bernoulli(), iter = 5000,
                     prior = c(set_prior("normal(0,10)", class = 'Intercept'),
                               set_prior("normal(0,10)", class = 'b'),
                               set_prior("cauchy(0,1)", class = 'sd',
@@ -206,12 +206,248 @@ mod.cluster %>%
   geom_segment(aes(x=conf.low, xend=conf.high, yend=variable))
 ```
 
+Lastly, let's compare the fixed effects model:
+
+```{r, results='hide'}
+mod.fixed <- brm(pulled_left ~ actor + block + prosoc_left + prosoc_left:condition,
+                 data = d, family=bernoulli(),
+                 prior = c(set_prior("normal(0,10)", class="Intercept"),
+                           set_prior("normal(0,10)", class='b')))
+```
+```{r}
+summary(mod.fixed)
+```
+
+
+
 And the LOO comparison:
 
 ```{r}
-LOO(mod, mod.cluster)
+LOO(mod, mod.cluster, mod.fixed)
 ```
 
+Unsurprisingly, the fixed effect LOOIC is much worse, taking into account the standard error. 
+
+Page 376 has a good closing note on model comparison with information criteria. Rather than 'selecting' models, we can use LOO/WAIC/etc. as a way to explain the data/phenomenon. The comparison, not the 'selection' tells us that the inclusion of block doesn't matter, and the small standard deviation of block intercepts tell us why. This is something we can miss out on if we just present a fitted model with only actor intercepts and assure the readers that block doesn't matter.
+
+## Posterior Predictors within clusters
+
+A word of warning with multilevel models. The posterior predictive checks are going to look different than the raw data due to the inherent shrinkage. We'll see that in the next few examples. 
+
+The outlier 2 versus actor 3, representative of other actors. 
+
+```{r}
+library(modelr)
+d.pred <- d %>%
+  data_grid(prosoc_left = c(0,1),
+            condition = c(0,1),
+            actor = c(2,3)) %>%
+  add_fitted_samples(mod) %>%
+  mean_qi() %>%
+  unite(prosoc_left_condition, prosoc_left, condition, sep = "/")
+```
+```{r}
+ggplot(d.pred, aes(x = prosoc_left_condition, y = estimate,
+                   color=actor, group=actor)) +
+  coord_cartesian(ylim = c(0, 1)) + 
+  geom_line() +
+  geom_ribbon(aes(ymin=conf.low, ymax=conf.high),
+              alpha = 0.4, fill='grey60', color=NA)
+  
+```
+
+All actors:
+
+```{r}
+d %>%
+  data_grid(prosoc_left = c(0,1),
+            condition = c(0,1),
+            actor = 1:7) %>%
+  add_fitted_samples(mod) %>%
+  mean_qi() %>%
+  unite(prosoc_left_condition, prosoc_left, condition, sep = "/") %>%
+  ggplot(aes(x = prosoc_left_condition, y = estimate, group=actor,
+             color = as.factor(actor))) + 
+    coord_cartesian(ylim = c(0, 1)) + 
+    geom_line()
+```
+
+We see the expected behavior, that all chimps pull left when food is available, regardless if the another chimp is there to benefit. 
+
+Let's take a look at some other graphical summaries of the actors.
+
+One way to is to look at the response averaged over actors:
+
+```{r}
+d.pred <- d %>% 
+  data_grid(prosoc_left = c(0,1),
+            condition = c(0,1),
+            actor = 1:7) %>% 
+  add_fitted_samples(mod)
+```
+```{r}
+d.pred %>%
+  group_by(prosoc_left, condition) %>%
+  mean_qi() %>%
+  unite(prosoc_left_condition, prosoc_left, condition, sep="/") %>%
+  ggplot(aes(x = prosoc_left_condition, y=estimate, group=actor)) +
+  geom_line() + 
+  geom_ribbon(aes(ymin = estimate.low, ymax=estimate.high),
+              alpha=0.4, fill='grey60') + 
+  coord_cartesian(ylim = c(0, 1))
+```
+
+However, the intervals make the variation hard to see. Let's just directly sample the simulated actors. This is 50 samples for each actor. 
+
+```{r}
+d %>% 
+  data_grid(prosoc_left = c(0,1),
+            condition = c(0,1),
+            actor = 1:7) %>% 
+  add_fitted_samples(mod, n=50) %>%
+  unite(prosoc_left_condition, prosoc_left, condition, sep="/") %>%
+  ggplot(aes(x = prosoc_left_condition, y=estimate, 
+             group=interaction(.iteration, actor))) +
+  geom_line(alpha = 0.25, color = 'red') +
+  coord_cartesian(ylim = c(0, 1))
+```
+
+Here the lines are a really effective presentation because it shows that the mean is slightly misleading us. The distribution isn't uniform; most of the clusters samples appear to be below `0.50`, where the mean is estimated. Let's try the previous plot again, but with the median:
+
+```{r}
+d.pred %>%
+  group_by(prosoc_left, condition) %>%
+  median_qi() %>%
+  unite(prosoc_left_condition, prosoc_left, condition, sep="/") %>%
+  ggplot(aes(x = prosoc_left_condition, y=estimate, group=actor)) +
+  geom_line() + 
+  geom_ribbon(aes(ymin = estimate.low, ymax=estimate.high),
+              alpha=0.4, fill='grey60') + 
+  coord_cartesian(ylim = c(0, 1))
+```
+
+This confirms our theory: the sampling isn't uniformly distributed across the probability scale. Most of the observations are lower, implying they pull left less, but there is enough variation/outliers (actors who always pull left) that the mean is pulled way up compared to the median. 
+
+
+## Posterior Predictions for new clusters
+
+The previous section didn't demonstrate any new tricks. But now we want to predict for new clusters. In the model, the clusters are just seven individual chimps. But from those 7, we were able to estimate the variation or distribution in the chimp population. Therefore, we will use `sd(Intercept)` to make those inferences.
+
+So we want to sample the intercept for a new actor from a normal distribution with mean zero and a standard deviation of `sd(Intercept)`.
+
+From the `brms` documentation:
+
+ - `fitted`
+ 
+ - parameter: `re_formula:` formula containing group-level effects to be considered in the prediction. If
+NULL (default), include all group-level effects; if NA, include no group-level effects.
+
+So we can fit the marginal actor by fitting an arbitrary actor, but telling `brms` to use the population level intercept and standard deviation.
+
+```{r}
+d %>% 
+  data_grid(prosoc_left = c(0,1),
+            condition = c(0,1),
+            actor = 1) %>% 
+  add_fitted_samples(mod, re_formula = NA) %>% 
+  group_by(prosoc_left, condition) %>% 
+  mean_qi() %>%
+  unite(prosoc_left_condition, prosoc_left, condition, sep="/") %>%
+  ggplot(aes(x = prosoc_left_condition, y=estimate, group=actor)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = estimate.low, ymax=estimate.high),
+              alpha=0.4, fill='grey60') +
+  coord_cartesian(ylim = c(0, 1))
+```
+
+We can also add samples from a new actor:
+
+```{r}
+d.pred <- d %>% 
+  data_grid(prosoc_left = c(0,1),
+            condition = c(0,1),
+            actor = 8) # a new individual, the number doesn't matter
+d.pred %>%
+  add_fitted_samples(mod, n=50, re_formula = NA, allow_new_levels = TRUE,
+                     sample_new_levels = 'gaussian') %>%
+  unite(prosoc_left_condition, prosoc_left, condition, sep="/") %>%
+  ggplot(aes(x = prosoc_left_condition, y=estimate, 
+             group=interaction(.iteration, actor))) +
+  geom_line(alpha = 0.25, color = 'red') +
+  coord_cartesian(ylim = c(0, 1))
+```
+
+The results don't quite look the same as the graphs on 380 (besides the order). For example, they have a lot more `0/*` clustered around `0.2` probability.
+
+Let's rebuild the link function manually and see what's going on:
+
+```{r}
+coef(mod)
+fixef(mod)
+post_par <- mod %>%
+  spread_samples(b_Intercept, b_prosoc_left, `b_prosoc_left:condition`)
+
+prosoc_left <- c(0,1,0,1)
+condition <- c(0,0,1,1)
+
+linear_link <- function(prosoc_left, condition) {
+  logodds <- with(post_par, 
+    post_par$b_Intercept + post_par$b_prosoc_left * prosoc_left + 
+    post_par$`b_prosoc_left:condition` * prosoc_left * condition)
+  return(logistic(logodds))
+}
+pred.table <- sapply(1:4, function(i) linear_link(prosoc_left[i], condition[i]))
+colnames(pred.table) <- c("0/0", "1/0", "0/1", "1/1")
+d.pred <- pred.table %>% 
+  as.tibble() %>%
+  gather(prosoc_left_condition, estimated_prob)  %>%
+  group_by(prosoc_left_condition) %>%
+  mean_qi()
+d.pred
+```
+```{r}
+d.pred %>%
+  ggplot(aes(x = prosoc_left_condition, y=estimated_prob, group=1))+
+  geom_line() +
+  geom_ribbon(aes(ymin = conf.low, ymax=conf.high),
+              alpha=0.4, fill='grey60') +
+  coord_cartesian(ylim = c(0, 1))
+```
+
+This provides no additional insight. I get exactly the same fit. 
+
+Let's test this:
+```{r}
+mean(post_par$b_Intercept)
+sd(post_par$b_Intercept)
+```
+
+This gives us the same mean and standard deviation as in `summary(mod)`. But this means it is not taking into account `sd(Intercept)` on the group level. 
+
+So we want to sample a new level, pulling the samples from the normal distrubiton with mean zero and standard deviation `sd(Intercept)`:
+
+```{r}
+d.pred <- d %>% 
+  data_grid(prosoc_left = c(0,1),
+            condition = c(0,1),
+            actor = 1:8)
+d.pred %>%
+  add_fitted_samples(mod, re_formula = NA, allow_new_levels = TRUE,
+                     sample_new_levels = 'gaussian') %>% 
+  group_by(prosoc_left, condition) %>% 
+  mean_qi() %>%
+  unite(prosoc_left_condition, prosoc_left, condition, sep="/") %>%
+  ggplot(aes(x = prosoc_left_condition, y=estimate, group=actor)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = estimate.low, ymax=estimate.high),
+              alpha=0.4, fill='grey60') +
+  coord_cartesian(ylim = c(0, 1))
+```
+
+```{r}
+fitted(mod, newdata=d.pred, allow_new_levels = TRUE, 
+       sample_new_levels = 'gaussian')
+```
 
 
 
