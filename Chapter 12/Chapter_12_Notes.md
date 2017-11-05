@@ -453,19 +453,46 @@ parnames(mod.cluster)
 ```
 
 ```r
-mod.cluster %>%
+par_samples <- mod.cluster %>%
   gather_samples(r_actor[actor,], r_block[block,],
                  b_Intercept, b_prosoc_left, `b_prosoc_left:condition`,
                  sd_block__Intercept, sd_actor__Intercept) %>%
-  mean_qi() %>%
   replace_na(list(actor = "", block = "")) %>%
-  unite(variable, term, actor, block) %>%
+  unite(variable, term, actor, block)
+
+par_samples %>%
+  group_by(variable) %>%
+  mean_qi(estimate) %>%
   ggplot(aes(y = variable, x = estimate)) +
   geom_point() +
   geom_segment(aes(x=conf.low, xend=conf.high, yend=variable))
 ```
 
 ![](Chapter_12_Notes_files/figure-html/unnamed-chunk-20-1.png)<!-- -->
+
+However, each parameter has a full marginal posterior distribution; this just shows the intervals. I'll introduce a few other ways to visualize these.
+
+First we'll try the `tidybayes` plot `geom_halfeyeh`:
+
+```r
+ggplot(par_samples, aes(y=variable, x = estimate)) + 
+  geom_halfeyeh()
+```
+
+<img src="Chapter_12_Notes_files/figure-html/unnamed-chunk-21-1.png" style="display: block; margin: auto;" />
+
+Next, there is an intriguing package `ggridges` that is able to overlap density plots, so we see the entire parameter distribution with effective use of space.
+
+
+```r
+library(ggridges)
+ggplot(par_samples, aes(y=variable, x = estimate)) + 
+  geom_density_ridges()
+```
+
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-22-1.png)<!-- -->
+
+
 
 Lastly, let's compare the fixed effects model:
 
@@ -482,7 +509,8 @@ summary(mod.fixed)
 ```
 
 ```
-##  Family: bernoulli(logit) 
+##  Family: bernoulli 
+##   Links: mu = logit 
 ## Formula: pulled_left ~ actor + block + prosoc_left + prosoc_left:condition 
 ##    Data: d (Number of observations: 504) 
 ## Samples: 4 chains, each with iter = 2000; warmup = 1000; thin = 1; 
@@ -552,7 +580,7 @@ ggplot(d.pred, aes(x = prosoc_left_condition, y = estimate,
               alpha = 0.4, fill='grey60', color=NA)
 ```
 
-![](Chapter_12_Notes_files/figure-html/unnamed-chunk-25-1.png)<!-- -->
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-27-1.png)<!-- -->
 
 All actors:
 
@@ -571,7 +599,7 @@ d %>%
     geom_line()
 ```
 
-![](Chapter_12_Notes_files/figure-html/unnamed-chunk-26-1.png)<!-- -->
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-28-1.png)<!-- -->
 
 We see the expected behavior, that all chimps pull left when food is available, regardless if the another chimp is there to benefit. 
 
@@ -600,7 +628,7 @@ d.pred %>%
   coord_cartesian(ylim = c(0, 1))
 ```
 
-![](Chapter_12_Notes_files/figure-html/unnamed-chunk-28-1.png)<!-- -->
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-30-1.png)<!-- -->
 
 However, the intervals make the variation hard to see. Let's just directly sample the simulated actors. This is 50 samples for each actor. 
 
@@ -618,7 +646,7 @@ d %>%
   coord_cartesian(ylim = c(0, 1))
 ```
 
-![](Chapter_12_Notes_files/figure-html/unnamed-chunk-29-1.png)<!-- -->
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-31-1.png)<!-- -->
 
 Here the lines are a really effective presentation because it shows that the mean is slightly misleading us. The distribution isn't uniform; most of the clusters samples appear to be below `0.50`, where the mean is estimated. Let's try the previous plot again, but with the median:
 
@@ -635,36 +663,32 @@ d.pred %>%
   coord_cartesian(ylim = c(0, 1))
 ```
 
-![](Chapter_12_Notes_files/figure-html/unnamed-chunk-30-1.png)<!-- -->
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-32-1.png)<!-- -->
 
 This confirms our theory: the sampling isn't uniformly distributed across the probability scale. Most of the observations are lower, implying they pull left less, but there is enough variation/outliers (actors who always pull left) that the mean is pulled way up compared to the median. 
 
 
 ## Posterior Predictions for new clusters
 
-The previous section didn't demonstrate any new tricks. But now we want to predict for new clusters. In the model, the clusters are just seven individual chimps. But from those 7, we were able to estimate the variation or distribution in the chimp population. Therefore, we will use `sd(Intercept)` to make those inferences.
+The previous section didn't demonstrate any new tricks. But now we want to predict for new clusters. In the model, the clusters are seven individual chimps. But from those 7, we were able to estimate the variation or distribution in the chimp population. Therefore, we will use `sd(Intercept)` to make those inferences.
 
 So we want to sample the intercept for a new actor from a normal distribution with mean zero and a standard deviation of `sd(Intercept)`.
 
-From the `brms` documentation:
+First, using the `brms` function parameter `re_formula`, we we same an arbitrary actor and tell the model to make predictions based solely off the population intercept and predictors.
 
- - `fitted`
- 
- - parameter: `re_formula:` formula containing group-level effects to be considered in the prediction. If
-NULL (default), include all group-level effects; if NA, include no group-level effects.
-
-So we can fit the marginal actor by fitting an arbitrary actor, but telling `brms` to use the population level intercept and standard deviation.
+As a warning: all confidence intervals will be 80% to be consistent with the graphs in figure 12.5, page 380:
 
 
 ```r
-d %>% 
+d.pred <- d %>% 
   data_grid(prosoc_left = c(0,1),
             condition = c(0,1),
             actor = 1) %>% 
   add_fitted_samples(mod, re_formula = NA) %>% 
   group_by(prosoc_left, condition) %>% 
-  mean_qi() %>%
-  unite(prosoc_left_condition, prosoc_left, condition, sep="/") %>%
+  mean_qi(.prob = .8) %>%
+  unite(prosoc_left_condition, prosoc_left, condition, sep="/")
+d.pred %>%
   ggplot(aes(x = prosoc_left_condition, y=estimate, group=actor)) +
   geom_line() +
   geom_ribbon(aes(ymin = estimate.low, ymax=estimate.high),
@@ -672,9 +696,9 @@ d %>%
   coord_cartesian(ylim = c(0, 1))
 ```
 
-![](Chapter_12_Notes_files/figure-html/unnamed-chunk-31-1.png)<!-- -->
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-33-1.png)<!-- -->
 
-We can also add samples from a new actor:
+Next, we want to actually sample a new actor. Using the same approach described on page 379, we create a new actor and sample their individual intercept from a normal distribution with mean equal to zero and a standard deviation of `sd(Intercept)`:
 
 
 ```r
@@ -683,152 +707,10 @@ d.pred <- d %>%
             condition = c(0,1),
             actor = 8) # a new individual, the number doesn't matter
 d.pred %>%
-  add_fitted_samples(mod, n=50, re_formula = NA, allow_new_levels = TRUE,
+  add_fitted_samples(mod, allow_new_levels = TRUE,
                      sample_new_levels = 'gaussian') %>%
-  unite(prosoc_left_condition, prosoc_left, condition, sep="/") %>%
-  ggplot(aes(x = prosoc_left_condition, y=estimate, 
-             group=interaction(.iteration, actor))) +
-  geom_line(alpha = 0.25, color = 'red') +
-  coord_cartesian(ylim = c(0, 1))
-```
-
-![](Chapter_12_Notes_files/figure-html/unnamed-chunk-32-1.png)<!-- -->
-
-The results don't quite look the same as the graphs on 380 (besides the order). For example, they have a lot more `0/*` clustered around `0.2` probability.
-
-Let's rebuild the link function manually and see what's going on:
-
-
-```r
-coef(mod)
-```
-
-```
-## $actor
-## , , Intercept
-## 
-##     Estimate Est.Error    2.5%ile   97.5%ile
-## 1 -0.7135518 0.2690228 -1.2430565 -0.1942693
-## 2  4.5912141 1.5547208  2.5190032  8.5608103
-## 3 -1.0150082 0.2768419 -1.5699818 -0.4827709
-## 4 -1.0184192 0.2789806 -1.5827588 -0.4776148
-## 5 -0.7130174 0.2671344 -1.2386154 -0.2007218
-## 6  0.2281377 0.2678222 -0.2907088  0.7530406
-## 7  1.7607290 0.3827303  1.0473948  2.5577523
-## 
-## , , prosoc_left
-## 
-##    Estimate Est.Error   2.5%ile 97.5%ile
-## 1 0.8258914 0.2538864 0.3375185 1.334127
-## 2 0.8258914 0.2538864 0.3375185 1.334127
-## 3 0.8258914 0.2538864 0.3375185 1.334127
-## 4 0.8258914 0.2538864 0.3375185 1.334127
-## 5 0.8258914 0.2538864 0.3375185 1.334127
-## 6 0.8258914 0.2538864 0.3375185 1.334127
-## 7 0.8258914 0.2538864 0.3375185 1.334127
-## 
-## , , prosoc_left:condition
-## 
-##     Estimate Est.Error    2.5%ile  97.5%ile
-## 1 -0.1362496 0.2967013 -0.7238661 0.4385835
-## 2 -0.1362496 0.2967013 -0.7238661 0.4385835
-## 3 -0.1362496 0.2967013 -0.7238661 0.4385835
-## 4 -0.1362496 0.2967013 -0.7238661 0.4385835
-## 5 -0.1362496 0.2967013 -0.7238661 0.4385835
-## 6 -0.1362496 0.2967013 -0.7238661 0.4385835
-## 7 -0.1362496 0.2967013 -0.7238661 0.4385835
-```
-
-```r
-fixef(mod)
-```
-
-```
-##                         Estimate Est.Error    2.5%ile  97.5%ile
-## Intercept              0.4188008 0.9090571 -1.3913826 2.3237012
-## prosoc_left            0.8258914 0.2538864  0.3375185 1.3341270
-## prosoc_left:condition -0.1362496 0.2967013 -0.7238661 0.4385835
-```
-
-```r
-post_par <- mod %>%
-  spread_samples(b_Intercept, b_prosoc_left, `b_prosoc_left:condition`)
-
-prosoc_left <- c(0,1,0,1)
-condition <- c(0,0,1,1)
-
-linear_link <- function(prosoc_left, condition) {
-  logodds <- with(post_par, 
-    post_par$b_Intercept + post_par$b_prosoc_left * prosoc_left + 
-    post_par$`b_prosoc_left:condition` * prosoc_left * condition)
-  return(logistic(logodds))
-}
-pred.table <- sapply(1:4, function(i) linear_link(prosoc_left[i], condition[i]))
-colnames(pred.table) <- c("0/0", "1/0", "0/1", "1/1")
-d.pred <- pred.table %>% 
-  as.tibble() %>%
-  gather(prosoc_left_condition, estimated_prob)  %>%
-  group_by(prosoc_left_condition) %>%
-  mean_qi()
-d.pred
-```
-
-```
-## # A tibble: 4 x 5
-## # Groups:   prosoc_left_condition [4]
-##   prosoc_left_condition estimated_prob  conf.low conf.high .prob
-##                   <chr>          <dbl>     <dbl>     <dbl> <dbl>
-## 1                   0/0      0.5885639 0.1991871 0.9108210  0.95
-## 2                   0/1      0.5885639 0.1991871 0.9108210  0.95
-## 3                   1/0      0.7450321 0.3610278 0.9601266  0.95
-## 4                   1/1      0.7216129 0.3377181 0.9536617  0.95
-```
-
-```r
-d.pred %>%
-  ggplot(aes(x = prosoc_left_condition, y=estimated_prob, group=1))+
-  geom_line() +
-  geom_ribbon(aes(ymin = conf.low, ymax=conf.high),
-              alpha=0.4, fill='grey60') +
-  coord_cartesian(ylim = c(0, 1))
-```
-
-![](Chapter_12_Notes_files/figure-html/unnamed-chunk-34-1.png)<!-- -->
-
-This provides no additional insight. I get exactly the same fit. 
-
-Let's test this:
-
-```r
-mean(post_par$b_Intercept)
-```
-
-```
-## [1] 0.4188008
-```
-
-```r
-sd(post_par$b_Intercept)
-```
-
-```
-## [1] 0.9090571
-```
-
-This gives us the same mean and standard deviation as in `summary(mod)`. But this means it is not taking into account `sd(Intercept)` on the group level. 
-
-So we want to sample a new level, pulling the samples from the normal distrubiton with mean zero and standard deviation `sd(Intercept)`:
-
-
-```r
-d %>% 
-  data_grid(prosoc_left = c(0,1),
-            condition = c(0,1),
-            actor = 8) %>% 
-  add_fitted_samples(mod, re_formula = NA, allow_new_levels = TRUE,
-                     sample_new_levels = 'gaussian') %>% 
   group_by(prosoc_left, condition) %>% 
-  mean_qi() %>%
+  mean_qi(.prob = .8) %>%
   unite(prosoc_left_condition, prosoc_left, condition, sep="/") %>%
   ggplot(aes(x = prosoc_left_condition, y=estimate, group=actor)) +
   geom_line() +
@@ -837,7 +719,239 @@ d %>%
   coord_cartesian(ylim = c(0, 1))
 ```
 
-![](Chapter_12_Notes_files/figure-html/unnamed-chunk-36-1.png)<!-- -->
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-34-1.png)<!-- -->
+
+And since the confidence interval is so wide, let's try sampling individuals:
 
 
+```r
+d.pred %>%
+  add_fitted_samples(mod, n=50, allow_new_levels = TRUE,
+                     sample_new_levels = 'gaussian') %>%
+  unite(prosoc_left_condition, prosoc_left, condition, sep="/") %>%
+  ggplot(aes(x = prosoc_left_condition, y=estimate, 
+             group=interaction(.iteration, actor))) +
+  geom_line(alpha = 0.25, color = 'red') +
+  coord_cartesian(ylim = c(0, 1))
+```
+
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-35-1.png)<!-- -->
+
+These look pretty similar, up to ordering, of the graphs on 380. Let's make the `rethinking` model and compare our results.
+
+First, the marginal:
+
+
+```r
+m12.4 <- map2stan(
+  alist(
+    pulled_left ~ dbinom(1,p),
+    logit(p) <- a + a_actor[actor] + (bp + bpC * condition)*prosoc_left,
+    a_actor[actor] ~ dnorm(0,sigma_actor),
+    a ~ dnorm(0,10),
+    bp ~ dnorm(0,10),
+    bpC ~ dnorm(0,10),
+    sigma_actor ~ dcauchy(0,1)
+  ),
+  data=d, warmup=1000, iter=5000, chains=4, cores=4)
+```
+
+```r
+precis(m12.4)
+```
+
+```
+##              Mean StdDev lower 0.89 upper 0.89 n_eff Rhat
+## a            0.43   0.94      -1.06       1.83  3256    1
+## bp           0.82   0.26       0.39       1.22  8086    1
+## bpC         -0.13   0.30      -0.61       0.36  8172    1
+## sigma_actor  2.25   0.89       1.07       3.40  4219    1
+```
+
+
+
+```r
+post <- extract.samples(m12.4)
+post$a_actor_sim <- rnorm(16000, 0, post$sigma_actor)
+
+linear_link <- function(prosoc_left, condition) {
+  logodds <- with(post, 
+                  a + a_actor_sim + bp * prosoc_left + bpC * prosoc_left * condition)
+  return(logistic(logodds))
+}
+
+prosoc_left <- c(0,1,0,1)
+condition <-   c(0,0,1,1)
+pred.table <- sapply(1:4, function(i) 
+  linear_link(prosoc_left[i], condition[i]))
+colnames(pred.table) <- c("0/0", "1/0", "0/1", "1/1")
+
+pred.table <- as.tibble(pred.table) %>% 
+  gather(variable, estimate) %>%
+  group_by(variable) %>%
+  mean_qi(estimate, .prob = 0.8)
+pred.table
+```
+
+```
+## # A tibble: 4 x 5
+## # Groups:   variable [4]
+##   variable  estimate   conf.low conf.high .prob
+##      <chr>     <dbl>      <dbl>     <dbl> <dbl>
+## 1      0/0 0.5568908 0.07100706 0.9709803   0.8
+## 2      0/1 0.5568908 0.07100706 0.9709803   0.8
+## 3      1/0 0.6668118 0.14833768 0.9869153   0.8
+## 4      1/1 0.6499089 0.13350943 0.9853257   0.8
+```
+
+```r
+ggplot(pred.table, aes(x = variable, y=estimate, group=.prob)) +
+  geom_line() + 
+  geom_ribbon(aes(ymin = conf.low, ymax=conf.high), alpha=0.4, fill='grey60') +
+  coord_cartesian(ylim = c(0, 1))
+```
+
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-38-1.png)<!-- -->
+
+Which is the exact sample plot (and table value) as the marginal plot used in `brms`.
+
+Next, the average:
+
+
+```r
+linear_link <- function(prosoc_left, condition) {
+  logodds <- with(post, 
+                  a + bp * prosoc_left + bpC * prosoc_left * condition)
+  return(logistic(logodds))
+}
+
+prosoc_left <- c(0,1,0,1)
+condition <-   c(0,0,1,1)
+pred.table <- sapply(1:4, function(i) 
+  linear_link(prosoc_left[i], condition[i]))
+colnames(pred.table) <- c("0/0", "1/0", "0/1", "1/1")
+```
+
+```r
+pred.table <- as.tibble(pred.table) %>% 
+  gather(variable, estimate) %>%
+  group_by(variable) %>%
+  mean_qi(estimate, .prob = 0.8)
+pred.table
+```
+
+```
+## # A tibble: 4 x 5
+## # Groups:   variable [4]
+##   variable  estimate  conf.low conf.high .prob
+##      <chr>     <dbl>     <dbl>     <dbl> <dbl>
+## 1      0/0 0.5885248 0.3433185 0.8271808   0.8
+## 2      0/1 0.5885248 0.3433185 0.8271808   0.8
+## 3      1/0 0.7437564 0.5392129 0.9176634   0.8
+## 4      1/1 0.7214010 0.5067365 0.9072143   0.8
+```
+
+```r
+ggplot(pred.table, aes(x = variable, y=estimate, group=.prob)) +
+  geom_line() + 
+  geom_ribbon(aes(ymin = conf.low, ymax=conf.high), alpha=0.4, fill='grey60') +
+  coord_cartesian(ylim = c(0, 1))
+```
+
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-40-1.png)<!-- -->
+
+And we get the same results. I think the main problem for me was that the average actor plot looked like it peaked at `0.8`, but I think that is just an illusion. 
+
+## Predicting new clusters with Over-dispersion in Oceanic societies
+
+
+```r
+data(Kline)
+d <- Kline
+d$logpop <- log(d$population)
+d$society <- 1:10
+d %>% as.tibble()
+```
+
+```
+## # A tibble: 10 x 7
+##       culture population contact total_tools mean_TU    logpop society
+##        <fctr>      <int>  <fctr>       <int>   <dbl>     <dbl>   <int>
+##  1   Malekula       1100     low          13     3.2  7.003065       1
+##  2    Tikopia       1500     low          22     4.7  7.313220       2
+##  3 Santa Cruz       3600     low          24     4.0  8.188689       3
+##  4        Yap       4791    high          43     5.0  8.474494       4
+##  5   Lau Fiji       7400    high          33     5.0  8.909235       5
+##  6  Trobriand       8000    high          19     4.0  8.987197       6
+##  7      Chuuk       9200    high          40     3.8  9.126959       7
+##  8      Manus      13000     low          28     6.6  9.472705       8
+##  9      Tonga      17500    high          55     5.4  9.769956       9
+## 10     Hawaii     275000     low          71     6.6 12.524526      10
+```
+
+```r
+mod <- brm(total_tools ~ 1 + (1 | society) + logpop,
+             data = d, family=poisson(),
+             prior = c(prior(normal(0,10), class = Intercept),
+                       prior(normal(0,1), class = b),
+                       prior(cauchy(0,1), class = sd, group = society)))
+```
+
+```r
+summary(mod)
+```
+
+```
+##  Family: poisson 
+##   Links: mu = log 
+## Formula: total_tools ~ 1 + (1 | society) + logpop 
+##    Data: d (Number of observations: 10) 
+## Samples: 4 chains, each with iter = 2000; warmup = 1000; thin = 1; 
+##          total post-warmup samples = 4000
+##     ICs: LOO = NA; WAIC = NA; R2 = NA
+##  
+## Group-Level Effects: 
+## ~society (Number of levels: 10) 
+##               Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
+## sd(Intercept)     0.31      0.13     0.12     0.62        994 1.00
+## 
+## Population-Level Effects: 
+##           Estimate Est.Error l-95% CI u-95% CI Eff.Sample Rhat
+## Intercept     1.10      0.77    -0.56     2.59       1787 1.00
+## logpop        0.26      0.08     0.10     0.44       1747 1.00
+## 
+## Samples were drawn using sampling(NUTS). For each parameter, Eff.Sample 
+## is a crude measure of effective sample size, and Rhat is the potential 
+## scale reduction factor on split chains (at convergence, Rhat = 1).
+```
+
+
+```r
+d %>% 
+  data_grid(logpop = seq_range(logpop, n=10),
+            society = 11) %>%
+  add_predicted_samples(mod, allow_new_levels=TRUE,
+                        sample_new_levels='gaussian') %>%
+  mean_qi() %>%
+  ggplot(aes(x=logpop, y=pred)) + 
+  geom_line(aes(group=society)) +
+  geom_ribbon(aes(ymin=conf.low, ymax=conf.high), alpha=0.4, color='grey60') + 
+  geom_point(data=d, aes(x=logpop, y=total_tools))
+```
+
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-44-1.png)<!-- -->
+
+```r
+d %>% 
+  data_grid(logpop = seq_range(logpop, n=10),
+            society = 11) %>%
+  add_predicted_samples(mod, allow_new_levels=TRUE,
+                        sample_new_levels='gaussian') %>%
+  ggplot(aes(x=logpop)) +
+  stat_lineribbon(aes(y=pred), .prob = c(0.95, 0.75, 0.5)) +
+  geom_point(data=d, aes(x=logpop, y=total_tools)) +
+  scale_fill_brewer()
+```
+
+![](Chapter_12_Notes_files/figure-html/unnamed-chunk-45-1.png)<!-- -->
 

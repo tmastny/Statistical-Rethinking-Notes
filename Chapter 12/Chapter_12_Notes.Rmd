@@ -194,17 +194,38 @@ For the charter in Figure 12.4:
 # it would be nice if spread_samples() with no args just spread every
 # parameter available. 
 parnames(mod.cluster)
-mod.cluster %>%
+par_samples <- mod.cluster %>%
   gather_samples(r_actor[actor,], r_block[block,],
                  b_Intercept, b_prosoc_left, `b_prosoc_left:condition`,
                  sd_block__Intercept, sd_actor__Intercept) %>%
-  mean_qi() %>%
   replace_na(list(actor = "", block = "")) %>%
-  unite(variable, term, actor, block) %>%
+  unite(variable, term, actor, block)
+
+par_samples %>%
+  group_by(variable) %>%
+  mean_qi(estimate) %>%
   ggplot(aes(y = variable, x = estimate)) +
   geom_point() +
   geom_segment(aes(x=conf.low, xend=conf.high, yend=variable))
 ```
+
+However, each parameter has a full marginal posterior distribution; this just shows the intervals. I'll introduce a few other ways to visualize these.
+
+First we'll try the `tidybayes` plot `geom_halfeyeh`:
+```{r, fig.align='center'}
+ggplot(par_samples, aes(y=variable, x = estimate)) + 
+  geom_halfeyeh()
+```
+
+Next, there is an intriguing package `ggridges` that is able to overlap density plots, so we see the entire parameter distribution with effective use of space.
+
+```{r}
+library(ggridges)
+ggplot(par_samples, aes(y=variable, x = estimate)) + 
+  geom_density_ridges()
+```
+
+
 
 Lastly, let's compare the fixed effects model:
 
@@ -331,27 +352,43 @@ This confirms our theory: the sampling isn't uniformly distributed across the pr
 
 ## Posterior Predictions for new clusters
 
-The previous section didn't demonstrate any new tricks. But now we want to predict for new clusters. In the model, the clusters are just seven individual chimps. But from those 7, we were able to estimate the variation or distribution in the chimp population. Therefore, we will use `sd(Intercept)` to make those inferences.
+The previous section didn't demonstrate any new tricks. But now we want to predict for new clusters. In the model, the clusters are seven individual chimps. But from those 7, we were able to estimate the variation or distribution in the chimp population. Therefore, we will use `sd(Intercept)` to make those inferences.
 
 So we want to sample the intercept for a new actor from a normal distribution with mean zero and a standard deviation of `sd(Intercept)`.
 
-From the `brms` documentation:
+First, using the `brms` function parameter `re_formula`, we we same an arbitrary actor and tell the model to make predictions based solely off the population intercept and predictors.
 
- - `fitted`
- 
- - parameter: `re_formula:` formula containing group-level effects to be considered in the prediction. If
-NULL (default), include all group-level effects; if NA, include no group-level effects.
-
-So we can fit the marginal actor by fitting an arbitrary actor, but telling `brms` to use the population level intercept and standard deviation.
+As a warning: all confidence intervals will be 80% to be consistent with the graphs in figure 12.5, page 380:
 
 ```{r}
-d %>% 
+d.pred <- d %>% 
   data_grid(prosoc_left = c(0,1),
             condition = c(0,1),
             actor = 1) %>% 
   add_fitted_samples(mod, re_formula = NA) %>% 
   group_by(prosoc_left, condition) %>% 
-  mean_qi() %>%
+  mean_qi(.prob = .8) %>%
+  unite(prosoc_left_condition, prosoc_left, condition, sep="/")
+d.pred %>%
+  ggplot(aes(x = prosoc_left_condition, y=estimate, group=actor)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = estimate.low, ymax=estimate.high),
+              alpha=0.4, fill='grey60') +
+  coord_cartesian(ylim = c(0, 1))
+```
+
+Next, we want to actually sample a new actor. Using the same approach described on page 379, we create a new actor and sample their individual intercept from a normal distribution with mean equal to zero and a standard deviation of `sd(Intercept)`:
+
+```{r}
+d.pred <- d %>% 
+  data_grid(prosoc_left = c(0,1),
+            condition = c(0,1),
+            actor = 8) # a new individual, the number doesn't matter
+d.pred %>%
+  add_fitted_samples(mod, allow_new_levels = TRUE,
+                     sample_new_levels = 'gaussian') %>%
+  group_by(prosoc_left, condition) %>% 
+  mean_qi(.prob = .8) %>%
   unite(prosoc_left_condition, prosoc_left, condition, sep="/") %>%
   ggplot(aes(x = prosoc_left_condition, y=estimate, group=actor)) +
   geom_line() +
@@ -360,15 +397,11 @@ d %>%
   coord_cartesian(ylim = c(0, 1))
 ```
 
-We can also add samples from a new actor:
+And since the confidence interval is so wide, let's try sampling individuals:
 
 ```{r}
-d.pred <- d %>% 
-  data_grid(prosoc_left = c(0,1),
-            condition = c(0,1),
-            actor = 8) # a new individual, the number doesn't matter
 d.pred %>%
-  add_fitted_samples(mod, n=50, re_formula = NA, allow_new_levels = TRUE,
+  add_fitted_samples(mod, n=50, allow_new_levels = TRUE,
                      sample_new_levels = 'gaussian') %>%
   unite(prosoc_left_condition, prosoc_left, condition, sep="/") %>%
   ggplot(aes(x = prosoc_left_condition, y=estimate, 
@@ -377,77 +410,130 @@ d.pred %>%
   coord_cartesian(ylim = c(0, 1))
 ```
 
-The results don't quite look the same as the graphs on 380 (besides the order). For example, they have a lot more `0/*` clustered around `0.2` probability.
+These look pretty similar, up to ordering, of the graphs on 380. Let's make the `rethinking` model and compare our results.
 
-Let's rebuild the link function manually and see what's going on:
+First, the marginal:
+
+```{r, results='hide'}
+m12.4 <- map2stan(
+  alist(
+    pulled_left ~ dbinom(1,p),
+    logit(p) <- a + a_actor[actor] + (bp + bpC * condition)*prosoc_left,
+    a_actor[actor] ~ dnorm(0,sigma_actor),
+    a ~ dnorm(0,10),
+    bp ~ dnorm(0,10),
+    bpC ~ dnorm(0,10),
+    sigma_actor ~ dcauchy(0,1)
+  ),
+  data=d, warmup=1000, iter=5000, chains=4, cores=4)
+```
+```{r}
+precis(m12.4)
+```
+
 
 ```{r}
-coef(mod)
-fixef(mod)
-post_par <- mod %>%
-  spread_samples(b_Intercept, b_prosoc_left, `b_prosoc_left:condition`)
-
-prosoc_left <- c(0,1,0,1)
-condition <- c(0,0,1,1)
+post <- extract.samples(m12.4)
+post$a_actor_sim <- rnorm(16000, 0, post$sigma_actor)
 
 linear_link <- function(prosoc_left, condition) {
-  logodds <- with(post_par, 
-    post_par$b_Intercept + post_par$b_prosoc_left * prosoc_left + 
-    post_par$`b_prosoc_left:condition` * prosoc_left * condition)
+  logodds <- with(post, 
+                  a + a_actor_sim + bp * prosoc_left + bpC * prosoc_left * condition)
   return(logistic(logodds))
 }
-pred.table <- sapply(1:4, function(i) linear_link(prosoc_left[i], condition[i]))
+
+prosoc_left <- c(0,1,0,1)
+condition <-   c(0,0,1,1)
+pred.table <- sapply(1:4, function(i) 
+  linear_link(prosoc_left[i], condition[i]))
 colnames(pred.table) <- c("0/0", "1/0", "0/1", "1/1")
-d.pred <- pred.table %>% 
-  as.tibble() %>%
-  gather(prosoc_left_condition, estimated_prob)  %>%
-  group_by(prosoc_left_condition) %>%
-  mean_qi()
-d.pred
-```
-```{r}
-d.pred %>%
-  ggplot(aes(x = prosoc_left_condition, y=estimated_prob, group=1))+
-  geom_line() +
-  geom_ribbon(aes(ymin = conf.low, ymax=conf.high),
-              alpha=0.4, fill='grey60') +
+
+pred.table <- as.tibble(pred.table) %>% 
+  gather(variable, estimate) %>%
+  group_by(variable) %>%
+  mean_qi(estimate, .prob = 0.8)
+pred.table
+
+ggplot(pred.table, aes(x = variable, y=estimate, group=.prob)) +
+  geom_line() + 
+  geom_ribbon(aes(ymin = conf.low, ymax=conf.high), alpha=0.4, fill='grey60') +
   coord_cartesian(ylim = c(0, 1))
 ```
 
-This provides no additional insight. I get exactly the same fit. 
+Which is the exact sample plot (and table value) as the marginal plot used in `brms`.
 
-Let's test this:
+Next, the average:
+
 ```{r}
-mean(post_par$b_Intercept)
-sd(post_par$b_Intercept)
+linear_link <- function(prosoc_left, condition) {
+  logodds <- with(post, 
+                  a + bp * prosoc_left + bpC * prosoc_left * condition)
+  return(logistic(logodds))
+}
+
+prosoc_left <- c(0,1,0,1)
+condition <-   c(0,0,1,1)
+pred.table <- sapply(1:4, function(i) 
+  linear_link(prosoc_left[i], condition[i]))
+colnames(pred.table) <- c("0/0", "1/0", "0/1", "1/1")
+```
+```{r}
+pred.table <- as.tibble(pred.table) %>% 
+  gather(variable, estimate) %>%
+  group_by(variable) %>%
+  mean_qi(estimate, .prob = 0.8)
+pred.table
+
+ggplot(pred.table, aes(x = variable, y=estimate, group=.prob)) +
+  geom_line() + 
+  geom_ribbon(aes(ymin = conf.low, ymax=conf.high), alpha=0.4, fill='grey60') +
+  coord_cartesian(ylim = c(0, 1))
 ```
 
-This gives us the same mean and standard deviation as in `summary(mod)`. But this means it is not taking into account `sd(Intercept)` on the group level. 
+And we get the same results. I think the main problem for me was that the average actor plot looked like it peaked at `0.8`, but I think that is just an illusion. 
 
-So we want to sample a new level, pulling the samples from the normal distrubiton with mean zero and standard deviation `sd(Intercept)`:
+## Predicting new clusters with Over-dispersion in Oceanic societies
 
 ```{r}
-d.pred <- d %>% 
-  data_grid(prosoc_left = c(0,1),
-            condition = c(0,1),
-            actor = 1:8)
-d.pred %>%
-  add_fitted_samples(mod, re_formula = NA, allow_new_levels = TRUE,
-                     sample_new_levels = 'gaussian') %>% 
-  group_by(prosoc_left, condition) %>% 
+data(Kline)
+d <- Kline
+d$logpop <- log(d$population)
+d$society <- 1:10
+d %>% as.tibble()
+```
+```{r, results='hide'}
+mod <- brm(total_tools ~ 1 + (1 | society) + logpop,
+             data = d, family=poisson(),
+             prior = c(prior(normal(0,10), class = Intercept),
+                       prior(normal(0,1), class = b),
+                       prior(cauchy(0,1), class = sd, group = society)))
+```
+```{r}
+summary(mod)
+```
+
+```{r}
+d %>% 
+  data_grid(logpop = seq_range(logpop, n=10),
+            society = 11) %>%
+  add_predicted_samples(mod, allow_new_levels=TRUE,
+                        sample_new_levels='gaussian') %>%
   mean_qi() %>%
-  unite(prosoc_left_condition, prosoc_left, condition, sep="/") %>%
-  ggplot(aes(x = prosoc_left_condition, y=estimate, group=actor)) +
-  geom_line() +
-  geom_ribbon(aes(ymin = estimate.low, ymax=estimate.high),
-              alpha=0.4, fill='grey60') +
-  coord_cartesian(ylim = c(0, 1))
+  ggplot(aes(x=logpop, y=pred)) + 
+  geom_line(aes(group=society)) +
+  geom_ribbon(aes(ymin=conf.low, ymax=conf.high), alpha=0.4, color='grey60') + 
+  geom_point(data=d, aes(x=logpop, y=total_tools))
 ```
-
 ```{r}
-fitted(mod, newdata=d.pred, allow_new_levels = TRUE, 
-       sample_new_levels = 'gaussian')
+d %>% 
+  data_grid(logpop = seq_range(logpop, n=10),
+            society = 11) %>%
+  add_predicted_samples(mod, allow_new_levels=TRUE,
+                        sample_new_levels='gaussian') %>%
+  ggplot(aes(x=logpop)) +
+  stat_lineribbon(aes(y=pred), .prob = c(0.95, 0.75, 0.5)) +
+  geom_point(data=d, aes(x=logpop, y=total_tools)) +
+  scale_fill_brewer()
+  
 ```
-
-
 
