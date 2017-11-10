@@ -10,11 +10,11 @@ There is a folder for each chapter and in each folder there are files for notes 
 
 Self-study is difficult without feedback. I used the following sets of notes to check my understanding of the material.
 
-https://github.com/cavaunpeu/statistical-rethinking
+    -https://github.com/cavaunpeu/statistical-rethinking
 
-https://github.com/rlabbe/statistical-rethinking
+    -https://github.com/rlabbe/statistical-rethinking
 
-http://scs.math.yorku.ca/index.php/SCS_Reads_2016-2017
+    -http://scs.math.yorku.ca/index.php/SCS_Reads_2016-2017
 
 ### Why my notes are different
 
@@ -34,7 +34,7 @@ Here are some of the packages that I incorporate:
 
 2. [tidybayes](https://github.com/mjskay/tidybayes) to extend the tidy philosophy to Bayesian tools.
 
-3. [brms](https://github.com/paul-buerkner/brms) as an alternative interface to Stan. This package allows you to construst full Bayesian models in Stan using the standard formula syntax, while offering some additional functionality to `rethinking::map2stan`. The package comes with a suite of helper functions that automate many of the common processes in the book, such as building the link function and calculating percentiles. For a comparsion to the rethinking package, check out the [brms overview](https://cran.r-project.org/web/packages/brms/vignettes/brms_overview.pdf). 
+3. [brms](https://github.com/paul-buerkner/brms) as an alternative interface to Stan. This package allows you to construst full Bayesian models in Stan using the standard formula syntax, while offering some additional functionality to `rethinking::map2stan`. The package comes with a suite of helper functions that automate many of the common processes in the book, such as building the inverse-link function and calculating percentiles. For a comparsion to the rethinking package, check out the [brms overview](https://cran.r-project.org/web/packages/brms/vignettes/brms_overview.pdf). 
 
 
 ### Contact and Discussion
