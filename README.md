@@ -10,11 +10,11 @@ There is a folder for each chapter and in each folder there are files for notes 
 
 Self-study is difficult without feedback. I used the following sets of notes to check my understanding of the material.
 
-    https://github.com/cavaunpeu/statistical-rethinking
+https://github.com/cavaunpeu/statistical-rethinking
 
-    https://github.com/rlabbe/statistical-rethinking
+https://github.com/rlabbe/statistical-rethinking
 
-    http://scs.math.yorku.ca/index.php/SCS_Reads_2016-2017
+http://scs.math.yorku.ca/index.php/SCS_Reads_2016-2017
 
 ### Why my notes are different
 
