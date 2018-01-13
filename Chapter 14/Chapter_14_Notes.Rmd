@@ -1,0 +1,128 @@
+---
+title: "Chapter 14 Notes"
+author: "Tim"
+date: "1/13/2018"
+output: 
+  html_document:
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, 
+                      results='show', cache=TRUE, autodep=TRUE)
+```
+
+## 14.1 Measurement Error
+Let's revisit the divorce and marriage data from chapter 5.
+
+```{r}
+library(rethinking)
+data("WaffleDivorce")
+d = WaffleDivorce
+```
+
+Note that the data also include standard errors for both divorce and marriage rates. The best way to analyze divorce and marriage rates would be if we had the observations at an individual level by applying a hierarchical model: but we can still use the standard error to improve our model and predictions.
+
+Let's take a look at what we are working with.
+
+```{r, fig.width=4, fig.height=4}
+library(tidyverse)
+library(magrittr)
+theme_set(theme_classic())
+
+d %<>% 
+  mutate(Divorce.low = Divorce - Divorce.SE) %>%
+  mutate(Divorce.high = Divorce + Divorce.SE)
+
+library(cowplot)
+
+ggplot(d, aes(x = MedianAgeMarriage, y = Divorce)) +
+  geom_linerange(aes(ymin = Divorce.low, ymax = Divorce.high)) + 
+  geom_text(aes(label = Loc))
+
+ggplot(d, aes(x = log(Population), y = Divorce)) +
+  geom_linerange(aes(ymin = Divorce.low, ymax = Divorce.high)) + 
+  geom_text(aes(label = Loc))
+```
+
+As we've seen before, the standard error is smaller in states with larger populations because they provide better samples, with the inverse being true for small states. Therefore, we would like a method to average over the low error in large state and large error in small states.
+
+The end goal is to model the divorce rate for each state. However, now we have additional information: we have the measurement error of the divorce rate.
+
+
+```{r, message=FALSE, warning=FALSE, results='hide'}
+dlist = list(
+  div_obs = d$Divorce,
+  div_sd = d$Divorce.SE,
+  R = d$Marriage,
+  A = d$MedianAgeMarriage
+)
+
+m14.1 = map2stan(
+  alist(
+    div_est ~ dnorm(mu, sigma),
+    mu <- a + bA * A + bR * R,
+    div_obs ~ dnorm(div_est, div_sd),
+    a ~ dnorm(0,100),
+    bA ~ dnorm(0,10),
+    bR ~ dnorm(0,10),
+    sigma ~ dcauchy(0, 2.5)
+  ),
+  data = dlist,
+  start = list(div_est = dlist$div_obs),
+  WAIC = FALSE,
+  iter = 5000,
+  warmup = 1000,
+  chains = 4,
+  cores = 4,
+  control = list(adapt_delta = 0.95)
+)
+```
+```{r}
+precis(m14.1, depth = 2)
+```
+
+Let's see if we can get a working `brms` model with the same capabilities.
+
+```{r}
+library(brms)
+library(rstan)
+
+rstan_options(auto_write=TRUE)
+options(mc.cores=parallel::detectCores())
+```
+```{r, results='hide'}
+error_mod <- brm(
+  Divorce | se(Divorce.SE, sigma = TRUE) ~ Marriage + MedianAgeMarriage,
+  prior = c(
+    prior(normal(0, 10), class = b),
+    prior(cauchy(0, 2.5), class = sigma)
+  ),
+  data=d, iter=5000, warmup=1000,
+)
+```
+```{r}
+summary(error_mod)
+```
+
+Which gives a near identical results. 
+
+Let's fit the model without measurement error for comparison:
+
+```{r, results='hide'}
+std_mod <- brm(
+  Divorce ~ Marriage + MedianAgeMarriage,
+  prior = c(
+    prior(normal(0, 10), class = b),
+    prior(cauchy(0, 2.5), class = sigma)
+  ),
+  data=d, iter=5000, warmup=1000,
+)
+```
+```{r}
+summary(std_mod)
+```
+
+Let's compare the predidctions:
+
+

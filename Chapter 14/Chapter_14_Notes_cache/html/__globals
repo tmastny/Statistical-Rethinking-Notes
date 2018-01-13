@@ -1,0 +1,10 @@
+unnamed-chunk-1	library	rethinking	data	d	WaffleDivorce
+unnamed-chunk-2	library	tidyverse	magrittr	theme_set	theme_classic	d	%<>%	mutate	Divorce	Divorce.SE	%>%	cowplot	ggplot	aes	MedianAgeMarriage	geom_linerange	Divorce.low	Divorce.high	geom_text	Loc	log	Population
+unnamed-chunk-3	dlist	list	d	Divorce	Divorce.SE	Marriage	MedianAgeMarriage	m14.1	map2stan	alist	div_est	dnorm	mu	sigma	a	bA	A	bR	R	div_obs	div_sd	dcauchy
+unnamed-chunk-4	precis	m14.1
+unnamed-chunk-5	library	brms	rstan	rstan_options	options	detectCores
+unnamed-chunk-6	error_mod	brm	Divorce	se	Divorce.SE	Marriage	MedianAgeMarriage	c	prior	normal	b	cauchy	sigma	d
+unnamed-chunk-7	summary	error_mod
+unnamed-chunk-8	std_mod	brm	Divorce	Marriage	MedianAgeMarriage	c	prior	normal	b	cauchy	sigma	d
+unnamed-chunk-9	summary	std_mod
+unnamed-chunk-10	
